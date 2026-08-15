@@ -1,0 +1,107 @@
+# Renvor infra — never commit operational secrets.
+#
+# This file is a safety net, not a substitute for review. Stage files by
+# explicit path and read what you are committing.
+
+# ---------------------------------------------------------------- env files
+.env
+.env.*
+!.env.example
+
+# ------------------------------------------------- private keys and cert keys
+*.pem
+*.key
+*.p8
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.asc
+*.gpg
+*.priv
+id_rsa
+id_rsa.*
+id_rsa*
+id_ed25519
+id_ed25519.*
+id_ed25519*
+id_ecdsa*
+id_dsa*
+*_rsa
+*_ed25519
+*.ppk
+
+# ------------------------------------------------------------- kubeconfigs
+kubeconfig
+kubeconfig.*
+*kubeconfig*
+*.kubeconfig
+.kube/
+admin.conf
+
+# --------------------------------------------------------------- Terraform
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+crash.log
+crash.*.log
+*.tfvars
+*.tfvars.json
+!*.example.tfvars
+!example.tfvars
+!terraform.tfvars.example
+
+# ------------------------------------------------ plaintext secret manifests
+secret.yaml
+secret.yml
+secrets.yaml
+secrets.yml
+*-secret.yaml
+*-secret.yml
+*-secrets.yaml
+*-secrets.yml
+*.secret.yaml
+*.secret.yml
+!*-secret.example.yaml
+!*-secret.example.yml
+
+# -------------------------------------------------------- credential dumps
+*.htpasswd
+.netrc
+.npmrc
+.docker/config.json
+credentials
+credentials.*
+
+# ------------------------------------------------------------ editors / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*.swn
+*~
+.\#*
+\#*\#
+
+# ----------------------------------------------------------------- OS cruft
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# ------------------------------------------------------------- temp / build
+*.log
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+tmp/
+temp/
+.cache/
