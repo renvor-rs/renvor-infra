@@ -75,7 +75,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p rendered
-          for o in apps/renvor-site/overlays/staging apps/renvor-site/overlays/production clusters/hostinger; do
+          # `clusters/hostinger/flux-system` is built here too. It is hand-applied rather than
+          # reconciled, which is exactly why it needs building in CI: the JSON6902 patch that
+          # adds the three controller flags is otherwise never exercised, and a wrong path in it
+          # would surface for the first time during a live bootstrap — producing a controller
+          # with no `--default-service-account`, which fails open to cluster-admin.
+          for o in apps/renvor-site/overlays/staging apps/renvor-site/overlays/production clusters/hostinger clusters/hostinger/flux-system; do
             name="$(echo "$o" | tr '/' '-')"
             echo "── $o"
             kubectl kustomize "$o" > "rendered/${name}.yaml"
@@ -279,23 +284,79 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           import glob, sys, yaml
-          ALLOWED = {'renvor-site', 'renvor-site-staging', 'flux-system', ''}
-          bad = []
+
+          # THE RULE DEPENDS ON WHO APPLIES THE FILE, so the three scopes are judged separately.
+          #
+          # A previous version applied one rule to everything and contained a dead condition:
+          # `kind in (..., 'Namespace') and kind != 'Namespace'` can never fire, so Namespaces
+          # were silently exempt from the cluster-scoped check they appeared to be covered by.
+          # It also omitted Node, CustomResourceDefinition, PersistentVolume and StorageClass
+          # entirely.
+          CLUSTER_SCOPED = {
+              'ClusterRole', 'ClusterRoleBinding', 'ClusterIssuer', 'Namespace', 'Node',
+              'CustomResourceDefinition', 'PersistentVolume', 'StorageClass',
+              'ValidatingWebhookConfiguration', 'MutatingWebhookConfiguration',
+              'APIService', 'PriorityClass', 'IngressClass', 'RuntimeClass',
+          }
+          RENVOR_NS = {'renvor-site', 'renvor-site-staging'}
+
+          # What the hand-applied bootstrap is allowed to create, exactly. Upstream Flux
+          # legitimately ships cluster-scoped objects; the point is that the inventory is fixed
+          # and reviewed, so a new one arriving is visible rather than assumed fine.
+          BOOTSTRAP_EXPECTED = {
+              'CustomResourceDefinition': 7, 'ClusterRole': 3, 'ClusterRoleBinding': 2,
+              'Namespace': 3, 'ServiceAccount': 3, 'Deployment': 2, 'Service': 1,
+              'NetworkPolicy': 3, 'ResourceQuota': 1, 'Role': 2, 'RoleBinding': 2,
+          }
+
+          bad, counted = [], 0
           for path in sorted(glob.glob('rendered/*.yaml')):
-              for d in yaml.safe_load_all(open(path)):
-                  if not d: continue
-                  ns = d.get('metadata', {}).get('namespace', '')
-                  kind, name = d.get('kind'), d.get('metadata', {}).get('name')
-                  if ns not in ALLOWED:
-                      bad.append(f"{path}: {kind}/{name} targets namespace {ns!r}")
-                  # A cluster-scoped object is not forbidden outright, but it must be named here
-                  # deliberately rather than arriving by accident.
-                  if kind in ('ClusterRole', 'ClusterRoleBinding', 'ClusterIssuer', 'Namespace') and kind != 'Namespace':
-                      bad.append(f"{path}: cluster-scoped {kind}/{name} — this repository creates none")
+              docs = [d for d in yaml.safe_load_all(open(path)) if d]
+              counted += len(docs)
+              if path.startswith('rendered/apps-'):
+                  # RECONCILED FROM A PUBLIC REPOSITORY. Nothing cluster-scoped, nothing outside
+                  # the two Renvor namespaces. The reconciler has no authority for either, so
+                  # this duplicates RBAC on purpose — it fails in review rather than at apply.
+                  for d in docs:
+                      kind = d.get('kind'); name = d.get('metadata', {}).get('name')
+                      ns = d.get('metadata', {}).get('namespace', '')
+                      if kind in CLUSTER_SCOPED:
+                          bad.append(f"{path}: cluster-scoped {kind}/{name} in a reconciled overlay")
+                      if ns and ns not in RENVOR_NS:
+                          bad.append(f"{path}: {kind}/{name} targets namespace {ns!r}")
+              elif path == 'rendered/clusters-hostinger.yaml':
+                  # THE CONTROL PLANE, hand-applied: only Flux control objects, only in flux-system.
+                  for d in docs:
+                      kind = d.get('kind'); name = d.get('metadata', {}).get('name')
+                      ns = d.get('metadata', {}).get('namespace', '')
+                      if kind not in ('GitRepository', 'Kustomization'):
+                          bad.append(f"{path}: unexpected {kind}/{name} in the control plane")
+                      if ns != 'flux-system':
+                          bad.append(f"{path}: {kind}/{name} is in namespace {ns!r}, not flux-system")
+              elif path == 'rendered/clusters-hostinger-flux-system.yaml':
+                  # THE BOOTSTRAP, hand-applied: cluster-scoped objects allowed, inventory fixed.
+                  seen = {}
+                  for d in docs:
+                      kind = d.get('kind'); name = d.get('metadata', {}).get('name')
+                      ns = d.get('metadata', {}).get('namespace', '')
+                      seen[kind] = seen.get(kind, 0) + 1
+                      if ns and ns not in (RENVOR_NS | {'flux-system'}):
+                          bad.append(f"{path}: {kind}/{name} targets namespace {ns!r}")
+                  if seen != BOOTSTRAP_EXPECTED:
+                      for k in sorted(set(seen) | set(BOOTSTRAP_EXPECTED)):
+                          if seen.get(k, 0) != BOOTSTRAP_EXPECTED.get(k, 0):
+                              bad.append(f"{path}: {k} count is {seen.get(k, 0)}, "
+                                         f"expected {BOOTSTRAP_EXPECTED.get(k, 0)}")
+              else:
+                  bad.append(f"{path}: unclassified render — add it to the blast-radius rules")
+
+          if not counted:
+              sys.exit("no rendered objects were inspected; this check would pass vacuously")
           if bad:
               for b in bad: print(f"::error::{b}")
               sys.exit(1)
-          print("every object targets a Renvor namespace; no cluster-scoped object is created")
+          print(f"{counted} objects: reconciled overlays are namespaced and Renvor-only; "
+                f"the hand-applied bootstrap matches its reviewed inventory")
           PY
 
       # ── Secrets ─────────────────────────────────────────────────────────────────────

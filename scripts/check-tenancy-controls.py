@@ -31,6 +31,8 @@ BOOTSTRAP = "clusters/hostinger/flux-system/kustomization.yaml"
 # forbidden reappears in a reconciled overlay" controls append to.
 RENDERS = sys.argv[1:] or ["rendered/staging.yaml", "rendered/production.yaml"]
 STAGING_RENDER = RENDERS[0]
+# The production render — the only one carrying IngressRoutes.
+PROD_RENDER = RENDERS[1] if len(RENDERS) > 1 else RENDERS[0]
 
 
 def edit(root: pathlib.Path, rel: str, fn) -> None:
@@ -115,6 +117,42 @@ CONTROLS = [
                        lambda t: t.replace("--no-remote-bases=true", "")),
     ),
     (
+        "the controller loses --no-cross-namespace-refs",
+        lambda r: edit(r, BOOTSTRAP,
+                       lambda t: t.replace("--no-cross-namespace-refs=true", "")),
+    ),
+    (
+        # THE FAIL-OPEN CASE A TEXT SEARCH CANNOT SEE.
+        # The whole `patches:` block is deleted, so the built controller carries none of the
+        # three flags — but every flag string survives inside the surrounding comments, so a
+        # substring search over the file still finds all three and reports success. The built
+        # cluster would silently fall back to cluster-admin reconciliation.
+        "the patches block is deleted but the flags survive in comments",
+        lambda r: edit(r, BOOTSTRAP, lambda t: t[:t.index("patches:")] + "patches: []\n"),
+    ),
+    (
+        "the health-check read on pods is removed (wait: true would fail closed)",
+        lambda r: edit(r, TENANCY,
+                       lambda t: t.replace(
+                           "  - apiGroups: ['']\n    resources: ['pods']\n"
+                           "    verbs: ['get', 'list', 'watch']\n", "", 1)),
+    ),
+    (
+        "the health-check read on replicasets is removed",
+        lambda r: edit(r, TENANCY,
+                       lambda t: t.replace(
+                           "  - apiGroups: ['apps']\n    resources: ['replicasets']\n"
+                           "    verbs: ['get', 'list', 'watch']\n", "", 1)),
+    ),
+    (
+        "a health-check read is widened to a write grant",
+        lambda r: edit(r, TENANCY,
+                       lambda t: t.replace(
+                           "    resources: ['pods']\n    verbs: ['get', 'list', 'watch']",
+                           "    resources: ['pods']\n"
+                           "    verbs: ['get', 'list', 'watch', 'create', 'delete']", 1)),
+    ),
+    (
         "the source artifact re-includes the control plane",
         lambda r: edit(r, GITREPO, lambda t: t.replace("    !/apps\n", "    !/apps\n    !/clusters\n")),
     ),
@@ -152,6 +190,34 @@ CONTROLS = [
         lambda r: edit(r, GITREPO,
                        lambda t: t.replace("  timeout: 60s",
                                            "  secretRef:\n    name: deploy-key\n  timeout: 60s")),
+    ),
+    (
+        # The cross-tenant hijack: entirely inside the RBAC boundary, because Traefik routes
+        # cluster-globally and does not care which namespace an IngressRoute lives in.
+        "an IngressRoute claims a co-tenant's hostname",
+        lambda r: edit(r, PROD_RENDER,
+                       lambda t: t.replace("Host(`renvor.dev`)",
+                                           "Host(`gitlab.ahmedanbar.dev`)", 1)),
+    ),
+    (
+        "an IngressRoute installs a bare catch-all with no Host() term",
+        lambda r: edit(r, PROD_RENDER,
+                       lambda t: t.replace("match: Host(`renvor.dev`)", "match: PathPrefix(`/`)", 1)),
+    ),
+    (
+        "an IngressRoute uses a wildcard host matcher",
+        lambda r: edit(r, PROD_RENDER,
+                       lambda t: t.replace("match: Host(`renvor.dev`)",
+                                           "match: HostRegexp(`^.+$`)", 1)),
+    ),
+    (
+        # NetworkPolicies are additive: a second policy can only widen the union.
+        "a second NetworkPolicy quietly re-opens egress",
+        lambda r: (r / PROD_RENDER).write_text(
+            (r / PROD_RENDER).read_text()
+            + "\n---\napiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\n"
+              "metadata:\n  name: renvor-site-allow-egress\n"
+              "spec:\n  podSelector: {}\n  policyTypes: [Egress]\n  egress:\n  - {}\n"),
     ),
 ]
 

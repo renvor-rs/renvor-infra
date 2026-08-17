@@ -31,6 +31,8 @@ from __future__ import annotations
 
 import collections
 import pathlib
+import re
+import subprocess
 import sys
 
 import yaml
@@ -62,9 +64,28 @@ KIND_TO_RULE = {
     "Middleware": ("traefik.io", "middlewares"),
 }
 
-# Reconciliation must be able to create, read for health checks, update, and — because
-# `prune: true` is set — delete. Nothing beyond that.
-REQUIRED_VERBS = {"get", "list", "watch", "create", "update", "patch", "delete"}
+# Reconciliation must be able to create, read, update, and — because `prune: true` is set —
+# delete the resources it manages. Nothing beyond that.
+MANAGED_VERBS = {"get", "list", "watch", "create", "update", "patch", "delete"}
+
+# Read-only verbs, for resources observed but never applied.
+READ_VERBS = {"get", "list", "watch"}
+
+# Resources the reconciler must be able to READ but must never write.
+#
+# These are not in any manifest, which is exactly why they need naming here: derived-from-the-
+# overlays checking is structurally blind to them, and their absence does not fail until the
+# live cluster refuses a health check.
+#
+# `wait: true` runs kstatus through the *impersonated* client. kstatus's Deployment reader
+# resolves the generated ReplicaSets and then their Pods with a namespaced LIST, and propagates
+# a `forbidden` as an error rather than degrading — so without these the Kustomization never
+# reports Ready and production never reconciles. Write verbs are deliberately NOT granted: the
+# reconciler observes Pods, it does not create them.
+HEALTH_CHECK_READS: dict[tuple[str, str], set[str]] = {
+    ("apps", "replicasets"): READ_VERBS,
+    ("", "pods"): READ_VERBS,
+}
 
 # Kinds that must never appear in a reconciled overlay. Cluster-scoped objects escape the
 # namespace boundary; RBAC objects would let reconciliation widen its own authority; Flux
@@ -92,6 +113,30 @@ REQUIRED_CONTROLLER_ARGS = {
     "--no-cross-namespace-refs=true",
     "--no-remote-bases=true",
 }
+
+# The only hostnames Renvor may route.
+#
+# THIS IS THE ONE PLACE A FULLY RBAC-COMPLIANT COMMIT CAN REACH ANOTHER TENANT. Traefik matches
+# routes cluster-globally by rule and priority; it does not care which namespace an IngressRoute
+# lives in. So an IngressRoute inside `renvor-site` — entirely within this reconciler's granted
+# authority — can claim `Host(`gitlab.example.com`)`, or a bare `PathPrefix(`/`)` catch-all, at a
+# priority high enough to outrank the real owner and take its traffic.
+#
+# Namespaced RBAC cannot express that constraint, because the escape is not an API-server
+# authorisation question at all. It has to be asserted here.
+ALLOWED_ROUTE_HOSTS = {"renvor.dev", "www.renvor.dev"}
+
+# `Host(...)` extraction. Traefik accepts backticks, single and double quotes.
+HOST_CALL = re.compile(r"Host\(\s*([`'\"])([^`'\"]+)\1\s*\)")
+# Matchers that select on something other than an exact host are refused outright: a rule with
+# no Host() term matches on path alone and is therefore global.
+FORBIDDEN_MATCHERS = ("HostRegexp", "HostSNIRegexp")
+
+# NetworkPolicies the overlays are allowed to declare. Policies are ADDITIVE — a second policy
+# cannot tighten the first, only widen the union — so `egress: []` in the default-deny is a
+# guarantee only while no other policy grants egress. An unrecognised policy name means a new
+# one arrived, and it must be reviewed rather than assumed harmless.
+ALLOWED_NETWORKPOLICIES = {"renvor-site-default-deny", "renvor-site-allow-traefik"}
 
 failures: list[str] = []
 checks = 0
@@ -126,8 +171,18 @@ check("every supplied overlay render exists", not missing_render, str(missing_re
 
 required_rules: set[tuple[str, str]] = set()
 overlay_objects = 0
+def parse(path: str) -> list[dict]:
+    """Parse a render, turning a malformed file into a reported failure rather than a crash."""
+    try:
+        return [d for d in yaml.safe_load_all(pathlib.Path(path).read_text())
+                if isinstance(d, dict)]
+    except yaml.YAMLError as exc:
+        check(f"{path} parses as YAML", False, f"{type(exc).__name__}")
+        return []
+
+
 for path in rendered:
-    docs = [d for d in yaml.safe_load_all(pathlib.Path(path).read_text()) if isinstance(d, dict)]
+    docs = parse(path)
     check(f"{path} is non-empty", len(docs) > 0, f"{len(docs)} objects")
     overlay_objects += len(docs)
     bad = sorted({d["kind"] for d in docs if d.get("kind") in FORBIDDEN_IN_OVERLAYS})
@@ -142,6 +197,41 @@ for path in rendered:
 check("the overlays actually declare resources", overlay_objects > 0, f"{overlay_objects} objects")
 print(f"     derived requirement: {len(required_rules)} (apiGroup, resource) pairs")
 
+# --------------------------------------------- 1b. the shared ingress is the real escape hatch
+print("\n== no route claims a hostname that is not Renvor's ==")
+routes_seen = 0
+policies_seen = 0
+for path in rendered:
+    for d in parse(path):
+        if d.get("kind") == "IngressRoute":
+            for route in d["spec"].get("routes", []):
+                routes_seen += 1
+                match = route.get("match", "")
+                where = f"{d['metadata']['name']} p={route.get('priority')}"
+                hosts = {m.group(2) for m in HOST_CALL.finditer(match)}
+                check(f"{where}: the rule selects on an explicit Host()", bool(hosts),
+                      match[:70] if not hosts else f"{sorted(hosts)}")
+                foreign = hosts - ALLOWED_ROUTE_HOSTS
+                check(f"{where}: every Host() is a Renvor hostname", not foreign,
+                      f"foreign {sorted(foreign)}" if foreign else "clean")
+                bad_matcher = [m for m in FORBIDDEN_MATCHERS if m in match]
+                check(f"{where}: uses no wildcard host matcher", not bad_matcher, str(bad_matcher))
+
+        if d.get("kind") == "NetworkPolicy":
+            policies_seen += 1
+            name = d["metadata"]["name"]
+            spec = d.get("spec", {})
+            check(f"NetworkPolicy/{name} is one of the reviewed policies",
+                  name in ALLOWED_NETWORKPOLICIES, name)
+            # An empty rule object means "allow everything", not "allow nothing": the same
+            # shape that denies traffic when the list is absent permits all traffic when the
+            # list holds one empty element.
+            egress = spec.get("egress") or []
+            check(f"NetworkPolicy/{name} opens no egress", not egress, str(egress) or "none")
+
+check("at least one IngressRoute rule was inspected", routes_seen > 0, f"{routes_seen} rules")
+check("at least one NetworkPolicy was inspected", policies_seen > 0, f"{policies_seen} policies")
+
 # ---------------------------------------------------------------- 2. the Roles
 print("\n== the reconciler's authority matches that requirement exactly ==")
 tenancy = load(TENANCY)
@@ -152,27 +242,49 @@ check("the Roles are in the Renvor namespaces only",
       {r["metadata"]["namespace"] for r in roles} == RENVOR_NAMESPACES,
       str(sorted(r["metadata"]["namespace"] for r in roles)))
 
+# The full expectation: what the overlays apply (managed, full verbs) plus what the health
+# checks read (read-only). Anything outside this is surplus; anything inside it and absent is a
+# gap that will fail on the live cluster.
+expected: dict[tuple[str, str], set[str]] = {r: MANAGED_VERBS for r in required_rules}
+for pair, verbs in HEALTH_CHECK_READS.items():
+    if pair in expected:
+        # An applied resource that is also observed keeps its full verb set.
+        continue
+    expected[pair] = verbs
+
 for role in roles:
     ns = role["metadata"]["namespace"]
     granted: set[tuple[str, str]] = set()
     for rule in role.get("rules", []):
         for group in rule.get("apiGroups", []):
             for res in rule.get("resources", []):
-                granted.add((group, res))
+                pair = (group, res)
+                granted.add(pair)
                 verbs = set(rule.get("verbs", []))
-                check(f"{ns}: {group or 'core'}/{res} grants no verb beyond the required set",
-                      verbs <= REQUIRED_VERBS, str(sorted(verbs - REQUIRED_VERBS)) or "exact")
-                check(f"{ns}: {group or 'core'}/{res} grants every verb reconciliation needs",
-                      REQUIRED_VERBS <= verbs, str(sorted(REQUIRED_VERBS - verbs)) or "complete")
+                want = expected.get(pair)
+                label = f"{group or 'core'}/{res}"
+                if want is None:
+                    # Surplus — reported by the set comparison below; no verb judgement to make.
+                    pass
+                else:
+                    kind = "read-only" if want == READ_VERBS else "managed"
+                    check(f"{ns}: {label} grants exactly its {kind} verb set",
+                          verbs == want,
+                          f"extra {sorted(verbs - want)} missing {sorted(want - verbs)}"
+                          if verbs != want else "exact")
                 check(f"{ns}: {res} is not a forbidden resource", res not in NEVER_GRANT, res)
-                check(f"{ns}: {group or 'core'}/{res} uses no wildcard",
-                      "*" not in (group, res), f"{group}/{res}")
+                check(f"{ns}: {label} uses no wildcard", "*" not in (group, res), label)
 
-    missing = required_rules - granted
-    surplus = granted - required_rules
-    check(f"{ns}: every resource the overlays create is granted", not missing,
-          f"missing {sorted(missing)}" if missing else "complete")
-    check(f"{ns}: nothing is granted that the overlays do not create", not surplus,
+    missing = set(expected) - granted
+    surplus = granted - set(expected)
+    check(f"{ns}: every resource the overlays create is granted",
+          not (missing & required_rules),
+          f"missing {sorted(missing & required_rules)}" if (missing & required_rules) else "complete")
+    check(f"{ns}: the health-check reads are granted",
+          not (missing & set(HEALTH_CHECK_READS)),
+          f"missing {sorted(missing & set(HEALTH_CHECK_READS))}"
+          if (missing & set(HEALTH_CHECK_READS)) else "complete")
+    check(f"{ns}: nothing is granted beyond the overlays and the health checks", not surplus,
           f"surplus {sorted(surplus)}" if surplus else "minimal")
 
 # ---------------------------------------------------------------- 3. the bindings
@@ -234,10 +346,40 @@ for path in FLUX_KUSTOMIZATIONS:
 
 # ---------------------------------------------------------------- 6. controller flags
 print("\n== the controller cannot fall back to cluster-admin ==")
-bootstrap_kust = pathlib.Path(BOOTSTRAP_KUSTOMIZATION).read_text() if pathlib.Path(
-    BOOTSTRAP_KUSTOMIZATION).is_file() else ""
+#
+# THIS IS CHECKED AGAINST THE BUILT OUTPUT, NOT THE SOURCE TEXT.
+#
+# An earlier version asked `arg in bootstrap_kustomization_text`. That passes on a tree where
+# the `patches:` block has been deleted and the flags survive only inside a comment — the
+# rendered controller then has none of them, and the single most important one fails *open*
+# straight back to cluster-admin. A substring search cannot distinguish a live patch from a
+# sentence about a patch.
+#
+# So the bootstrap is built and the container's actual `args` array is read. If kustomize is
+# unavailable the check FAILS rather than degrading to the text search: an unverifiable
+# boundary is not a verified one.
+bootstrap_args: list[str] = []
+build_ok = False
+try:
+    built = subprocess.run(
+        ["kubectl", "kustomize", str(pathlib.Path(BOOTSTRAP_KUSTOMIZATION).parent)],
+        capture_output=True, text=True, timeout=120,
+    )
+    build_ok = built.returncode == 0
+    if build_ok:
+        for d in yaml.safe_load_all(built.stdout):
+            if isinstance(d, dict) and d.get("kind") == "Deployment" \
+               and d["metadata"]["name"] == "kustomize-controller":
+                bootstrap_args = d["spec"]["template"]["spec"]["containers"][0].get("args", [])
+except (OSError, subprocess.SubprocessError, yaml.YAMLError) as exc:
+    print(f"  (bootstrap build failed: {exc})")
+
+check("the bootstrap kustomization builds", build_ok,
+      "" if build_ok else (built.stderr[-200:] if 'built' in dir() else "kustomize unavailable"))
+check("the built bootstrap contains kustomize-controller", bool(bootstrap_args),
+      f"{len(bootstrap_args)} args")
 for arg in sorted(REQUIRED_CONTROLLER_ARGS):
-    check(f"bootstrap patches in {arg}", arg in bootstrap_kust)
+    check(f"the BUILT kustomize-controller carries {arg}", arg in bootstrap_args)
 
 # ---------------------------------------------------------------- 7. the source artifact
 print("\n== the reconciled artifact cannot contain the control plane ==")
