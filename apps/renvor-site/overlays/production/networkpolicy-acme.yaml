@@ -1,0 +1,60 @@
+# Let Traefik reach the ACME HTTP-01 solver, and nothing else reach anything.
+#
+# WHY THIS EXISTS
+# ---------------
+# The namespace default-denies all ingress, and `renvor-site-allow-traefik` opens exactly one
+# hole: Traefik to pods labelled `app.kubernetes.io/name: renvor-site`, on port 8080.
+#
+# cert-manager's HTTP-01 solver pods carry none of those. They are created by cert-manager, they
+# are labelled `acme.cert-manager.io/http01-solver=true`, and they listen on 8089. So the
+# default-deny caught them, Traefik could not reach the challenge, and Let's Encrypt saw:
+#
+#     Waiting for HTTP-01 challenge propagation: wrong status code '502', expected '200'
+#
+# 502 rather than 404 is the tell: Traefik was routing correctly and could not connect to the
+# backend. Verified from inside the Traefik pod — a direct request to the solver's ClusterIP
+# returned `Connection refused` while the solver itself was Running and Ready.
+#
+# WHY IT IS PRODUCTION-ONLY
+# -------------------------
+# Staging deploys no Certificate and no Issuer, and is granted neither resource type, so no
+# solver can ever run there. A policy in the base would apply to a namespace where it selects
+# nothing — harmless, but it would suggest staging does ACME, which it does not.
+#
+# WHAT IT DOES NOT DO
+# -------------------
+# It adds no egress. The solver needs none: Let's Encrypt connects *inward* through Traefik to
+# read the challenge token. The namespace still has no outbound path of any kind.
+#
+# It is scoped to the solver label, so it stops applying the moment cert-manager deletes those
+# pods after issuance — which is most of the time.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: renvor-site-allow-acme-solver
+  labels:
+    app.kubernetes.io/name: renvor-site
+    app.kubernetes.io/part-of: renvor
+    app.kubernetes.io/managed-by: flux
+spec:
+  podSelector:
+    matchLabels:
+      # cert-manager sets this on every HTTP-01 solver pod it creates. Confirmed on the live
+      # pods rather than taken from documentation.
+      acme.cert-manager.io/http01-solver: 'true'
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        # Both selectors in ONE `from` element, which ANDs them — the same construction as
+        # `renvor-site-allow-traefik`, and for the same reason. Split across two elements they
+        # would OR, admitting any pod in kube-system and any Traefik-labelled pod anywhere.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+      ports:
+        - protocol: TCP
+          # The solver's own port, not the site's 8080.
+          port: 8089

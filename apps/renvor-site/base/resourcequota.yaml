@@ -24,10 +24,27 @@ spec:
   hard:
     requests.cpu: '200m'
     requests.memory: 256Mi
-    requests.ephemeral-storage: 512Mi
-    limits.cpu: '1'
-    limits.memory: 512Mi
-    limits.ephemeral-storage: 1Gi
+    requests.ephemeral-storage: 768Mi
+    # HEADROOM FOR A RENEWAL THAT COINCIDES WITH A ROLLING UPDATE.
+    #
+    # These were sized for the site alone and were exactly saturated the moment cert-manager
+    # ran: `limits.ephemeral-storage` sat at 1Gi of 1Gi with the two solver pods up, so no
+    # further pod could be scheduled at all.
+    #
+    # Certificates renew unattended at roughly two-thirds of their lifetime. If a renewal
+    # overlaps a deploy, the namespace needs 2 site replicas + 1 surge pod + 2 solver pods at
+    # once. Solver pods carry no resources of their own, so they inherit the LimitRange
+    # defaults (200m / 96Mi / 256Mi):
+    #
+    #   cpu               3x200m + 2x200m = 1000m   -> was exactly 1, now 2
+    #   memory            3x96Mi + 2x96Mi =  480Mi  -> was 512Mi, now 768Mi
+    #   ephemeral-storage 3x256Mi + 2x256Mi = 1280Mi -> was 1Gi, now 2Gi
+    #
+    # A quota that is exactly the steady-state figure is a quota that blocks the first
+    # unattended event, at the least convenient moment and with no human watching.
+    limits.cpu: '2'
+    limits.memory: 768Mi
+    limits.ephemeral-storage: 2Gi
     pods: '6'
     # Zero of each, and each for a reason:
     #   - the workload stores nothing, so a PersistentVolumeClaim here would be a mistake;
