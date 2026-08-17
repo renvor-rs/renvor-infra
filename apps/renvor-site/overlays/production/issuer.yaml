@@ -38,6 +38,20 @@ spec:
       - http01:
           ingress:
             ingressClassName: traefik
+            # ClusterIP, NOT the cert-manager default of NodePort.
+            #
+            # The ResourceQuota in the base sets `services.nodeports: 0`, so the solver's
+            # default NodePort Service is refused by admission and the ACME challenge sits
+            # `pending` forever:
+            #
+            #   services "cm-acme-http-solver-…" is forbidden: exceeded quota: renvor-site,
+            #   requested: services.nodeports=1, limited: services.nodeports=0
+            #
+            # The choice is between weakening the quota and correcting the solver, and the
+            # solver has no need of a NodePort here: Traefik reaches it through the Ingress
+            # cert-manager creates, in-cluster, so a ClusterIP is sufficient and does not
+            # expose a port on the node.
+            serviceType: ClusterIP
 ---
 apiVersion: cert-manager.io/v1
 kind: Issuer
@@ -62,3 +76,17 @@ spec:
       - http01:
           ingress:
             ingressClassName: traefik
+            # ClusterIP, NOT the cert-manager default of NodePort.
+            #
+            # The ResourceQuota in the base sets `services.nodeports: 0`, so the solver's
+            # default NodePort Service is refused by admission and the ACME challenge sits
+            # `pending` forever:
+            #
+            #   services "cm-acme-http-solver-…" is forbidden: exceeded quota: renvor-site,
+            #   requested: services.nodeports=1, limited: services.nodeports=0
+            #
+            # The choice is between weakening the quota and correcting the solver, and the
+            # solver has no need of a NodePort here: Traefik reaches it through the Ingress
+            # cert-manager creates, in-cluster, so a ClusterIP is sufficient and does not
+            # expose a port on the node.
+            serviceType: ClusterIP
