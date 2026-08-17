@@ -183,7 +183,14 @@ def route_is_host_restricted(match: str) -> tuple[bool, str]:
 # cannot tighten the first, only widen the union — so `egress: []` in the default-deny is a
 # guarantee only while no other policy grants egress. An unrecognised policy name means a new
 # one arrived, and it must be reviewed rather than assumed harmless.
-ALLOWED_NETWORKPOLICIES = {"renvor-site-default-deny", "renvor-site-allow-traefik"}
+ALLOWED_NETWORKPOLICIES = {
+    "renvor-site-default-deny",
+    "renvor-site-allow-traefik",
+    # Production only. Admits Traefik to the cert-manager HTTP-01 solver pods on
+    # 8089; without it the default-deny blocks the challenge and issuance fails
+    # with a 502 that looks like a routing fault.
+    "renvor-site-allow-acme-solver",
+}
 
 failures: list[str] = []
 checks = 0

@@ -12,6 +12,7 @@ resources:
   - issuer.yaml
   - certificate.yaml
   - middleware.yaml
+  - networkpolicy-acme.yaml
   - ingress.yaml
 
 # THE SAME DIGEST STAGING RAN. Promotion is copying this value across, never rebuilding — a
