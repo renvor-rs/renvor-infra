@@ -1,0 +1,34 @@
+# Defaults and bounds for anything created in this namespace.
+#
+# The ResourceQuota makes a pod without requests unschedulable; this makes most of them
+# schedulable anyway by supplying a default. The two work together: the LimitRange fills in
+# what was omitted, and the quota catches what neither the author nor this file provided.
+#
+# The `max` values are the real control. They stop a future edit — or a mistyped unit, `2` where
+# `200m` was meant — from claiming a share of a shared node that Renvor has no business taking.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: renvor-site
+  labels:
+    app.kubernetes.io/name: renvor-site
+    app.kubernetes.io/part-of: renvor
+    app.kubernetes.io/managed-by: flux
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: 200m
+        memory: 96Mi
+        ephemeral-storage: 256Mi
+      defaultRequest:
+        cpu: 10m
+        memory: 32Mi
+        ephemeral-storage: 64Mi
+      max:
+        cpu: 500m
+        memory: 256Mi
+        ephemeral-storage: 512Mi
+      min:
+        cpu: 5m
+        memory: 16Mi

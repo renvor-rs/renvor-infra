@@ -1,0 +1,44 @@
+# Staging: the same image, the same security settings, no way in from the internet.
+#
+# The point of this environment is to answer one question — does the exact digest that is about
+# to go to production actually run on this cluster — without that digest being reachable by
+# anyone. So it deliberately has NO Ingress, NO Certificate, and NO hostname. Validation is
+# done through a temporary `kubectl port-forward`, which requires cluster credentials and
+# leaves nothing behind.
+#
+# It is not a smaller or looser copy of production. Same base, same NetworkPolicy, same
+# non-root read-only container, same digest. The only differences are the namespace, one fewer
+# replica, and the absence of anything that would expose it.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: renvor-site-staging
+
+resources:
+  - namespace.yaml
+  - ../../base
+
+# The digest is the deployment. `newTag` is deliberately absent and must stay absent: a tag can
+# be repointed at different content, which would let what is running change without a commit.
+# This value is written by the promotion procedure in docs/runbooks/, never by hand from
+# memory.
+images:
+  - name: ghcr.io/renvor-rs/renvor-site
+    digest: sha256:PLACEHOLDER_REPLACED_BEFORE_MERGE
+
+patches:
+  # One replica. Staging exists to prove the image runs, and a second copy proves nothing
+  # further while consuming a share of a shared node.
+  - target:
+      kind: Deployment
+      name: renvor-site
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 1
+
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/instance: renvor-site-staging
+      renvor.dev/environment: staging

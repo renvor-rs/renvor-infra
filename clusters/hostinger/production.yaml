@@ -1,0 +1,41 @@
+# Production reconciliation.
+#
+# `dependsOn` is the load-bearing line: production does not reconcile until staging is Ready.
+# Because staging's `wait: true` and `healthChecks` mean Ready implies "the Deployment is
+# actually Available", a digest that cannot start never reaches production — the ordering is
+# enforced by the controller rather than by a human remembering the sequence.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: renvor-site-production
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: renvor-site-staging
+
+  interval: 10m
+  retryInterval: 1m
+  timeout: 5m
+  sourceRef:
+    kind: GitRepository
+    name: renvor-infra
+  path: ./apps/renvor-site/overlays/production
+
+  prune: true
+  wait: true
+
+  healthChecks:
+    - apiVersion: apps/v1
+      kind: Deployment
+      name: renvor-site
+      namespace: renvor-site
+    # The certificate is a health gate too. Without this the Kustomization would report Ready
+    # while `renvor.dev` served Traefik's default self-signed certificate — the site would be
+    # "deployed" and untrustable, which is the worst of both states.
+    - apiVersion: cert-manager.io/v1
+      kind: Certificate
+      name: renvor-dev-tls
+      namespace: renvor-site
+
+  targetNamespace: renvor-site
+  force: false

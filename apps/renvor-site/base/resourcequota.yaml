@@ -1,0 +1,39 @@
+# A ceiling on the whole namespace, not just on one Deployment.
+#
+# The Deployment already declares requests and limits, so this is not what stops the site
+# consuming the node. What it stops is a *second* thing appearing in this namespace without
+# them: `requests.cpu` and friends make a pod without a request unschedulable here, which
+# converts "someone forgot" from a silent resource leak into an immediate, obvious failure.
+#
+# That matters on this cluster specifically. It is shared with unrelated workloads, and its
+# history includes 524 pods evicted under DiskPressure — every one of them declaring no
+# ephemeral-storage request. Renvor's namespace is bounded so that Renvor cannot be the cause
+# of the next one.
+#
+# The figures are roughly 4x the two-replica steady state, leaving room for a rolling update
+# (which briefly runs three pods under `maxSurge: 1`) without leaving room for much else.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: renvor-site
+  labels:
+    app.kubernetes.io/name: renvor-site
+    app.kubernetes.io/part-of: renvor
+    app.kubernetes.io/managed-by: flux
+spec:
+  hard:
+    requests.cpu: '200m'
+    requests.memory: 256Mi
+    requests.ephemeral-storage: 512Mi
+    limits.cpu: '1'
+    limits.memory: 512Mi
+    limits.ephemeral-storage: 1Gi
+    pods: '6'
+    # Zero of each, and each for a reason:
+    #   - the workload stores nothing, so a PersistentVolumeClaim here would be a mistake;
+    #   - it needs no credential, so a Secret would be a mistake;
+    #   - it is reached only through Traefik, so a LoadBalancer or NodePort would open a second
+    #     path that bypasses TLS and the security headers.
+    persistentvolumeclaims: '0'
+    services.loadbalancers: '0'
+    services.nodeports: '0'

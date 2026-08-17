@@ -1,0 +1,318 @@
+# Manifest validation.
+#
+# This repository had **no CI at all** — a gap `PLAN.md` §26.1 records explicitly ("none — the
+# repository has no CI yet"). This closes it for everything that can be checked without touching
+# a cluster.
+#
+# WHAT IS DELIBERATELY NOT HERE: a server-side dry-run against the live API.
+#
+# That check is genuinely valuable — it is the only one that catches a rejection by a real
+# admission controller — but running it from GitHub would require cluster credentials stored as
+# a repository secret, and **no long-lived infrastructure credential may exist in GitHub**
+# (PLAN.md §26.9). So it is run by the maintainer over SSH before merge, and its output is
+# recorded in the pull request. A check that requires a stored kubeconfig is not worth a stored
+# kubeconfig.
+#
+# Every third-party action is pinned to a full commit SHA. A tag is a mutable pointer.
+
+name: infra-ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: infra-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  KUBECONFORM_VERSION: v0.7.0
+  KUBERNETES_VERSION: '1.35.5'
+
+jobs:
+  validate:
+    name: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Full history: `gitleaks git` scans commits, and a shallow clone would scan a
+          # handful of them while reporting a clean result for the repository.
+          fetch-depth: 0
+
+      # ── YAML is parseable at all ────────────────────────────────────────────────────
+      - name: Parse every YAML document
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob, sys
+          try:
+              import yaml
+          except ImportError:
+              sys.exit("PyYAML missing")
+          files = sorted(set(glob.glob('**/*.yaml', recursive=True) + glob.glob('**/*.yml', recursive=True)))
+          if not files:
+              sys.exit("::error::no YAML files found — the glob is wrong, which is not a pass")
+          total = 0
+          for f in files:
+              with open(f) as fh:
+                  docs = list(yaml.safe_load_all(fh))
+              total += len([d for d in docs if d])
+              print(f"  ok  {f}  ({len([d for d in docs if d])} document(s))")
+          print(f"parsed {len(files)} file(s), {total} document(s)")
+          PY
+
+      # ── Kustomize renders ───────────────────────────────────────────────────────────
+      - name: Build every overlay
+        run: |
+          set -euo pipefail
+          mkdir -p rendered
+          for o in apps/renvor-site/overlays/staging apps/renvor-site/overlays/production clusters/hostinger; do
+            name="$(echo "$o" | tr '/' '-')"
+            echo "── $o"
+            kubectl kustomize "$o" > "rendered/${name}.yaml"
+            count="$(grep -c '^kind:' "rendered/${name}.yaml")"
+            [ "$count" -gt 0 ] || { echo "::error::$o rendered zero resources"; exit 1; }
+            echo "   $count resources"
+          done
+
+      # ── Schema validation against the real cluster version ──────────────────────────
+      - name: Validate against Kubernetes schemas
+        run: |
+          set -euo pipefail
+          curl -sSLo /tmp/kubeconform.tar.gz \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform
+          # `-strict` rejects unknown fields — the class of error where a typo'd key is silently
+          # ignored and the setting a reviewer thought they were reading never applies.
+          # CRDs (Traefik, cert-manager, Flux) are not in the upstream schema set, so their
+          # schemas are pulled from the community catalogue rather than skipped: `-ignore-missing-schemas`
+          # would turn every CRD typo into a pass.
+          for f in rendered/*.yaml; do
+            echo "── $f"
+            /tmp/kubeconform -strict -summary \
+              -kubernetes-version "${KUBERNETES_VERSION}" \
+              -schema-location default \
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+              "$f"
+          done
+
+      # ── The security properties this repository promises ────────────────────────────
+      - name: Assert the workload security invariants
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob, sys, yaml
+
+          failures = []
+          checked = 0
+          for path in sorted(glob.glob('rendered/apps-*.yaml')):
+              for doc in yaml.safe_load_all(open(path)):
+                  if not doc or doc.get('kind') != 'Deployment':
+                      continue
+                  checked += 1
+                  name = doc['metadata']['name']
+                  spec = doc['spec']['template']['spec']
+                  pod_sc = spec.get('securityContext', {})
+
+                  def fail(msg):
+                      failures.append(f"{path}::{name}: {msg}")
+
+                  if spec.get('automountServiceAccountToken') is not False:
+                      fail("automountServiceAccountToken must be false")
+                  if spec.get('serviceAccountName') in (None, 'default'):
+                      fail("must use a dedicated ServiceAccount, not `default`")
+                  for host in ('hostNetwork', 'hostPID', 'hostIPC'):
+                      if spec.get(host):
+                          fail(f"{host} must not be enabled")
+                  if spec.get('volumes'):
+                      fail("declares volumes; this workload stores nothing")
+                  if pod_sc.get('runAsNonRoot') is not True:
+                      fail("pod securityContext.runAsNonRoot must be true")
+
+                  for c in spec['containers']:
+                      sc = c.get('securityContext', {})
+                      img = c['image']
+                      if '@sha256:' not in img:
+                          fail(f"image {img!r} is not pinned by digest")
+                      if 'PLACEHOLDER' in img:
+                          fail(f"image {img!r} still contains a placeholder digest")
+                      if sc.get('allowPrivilegeEscalation') is not False:
+                          fail("allowPrivilegeEscalation must be false")
+                      if sc.get('readOnlyRootFilesystem') is not True:
+                          fail("readOnlyRootFilesystem must be true")
+                      if sc.get('runAsNonRoot') is not True:
+                          fail("container runAsNonRoot must be true")
+                      if sc.get('capabilities', {}).get('drop') != ['ALL']:
+                          fail("must drop ALL capabilities")
+                      if sc.get('seccompProfile', {}).get('type') != 'RuntimeDefault':
+                          fail("seccompProfile must be RuntimeDefault")
+                      res = c.get('resources', {})
+                      for side in ('requests', 'limits'):
+                          for key in ('cpu', 'memory', 'ephemeral-storage'):
+                              if key not in res.get(side, {}):
+                                  fail(f"resources.{side}.{key} is missing")
+                      for probe in ('startupProbe', 'readinessProbe', 'livenessProbe'):
+                          if probe not in c:
+                              fail(f"{probe} is missing")
+
+          if checked == 0:
+              sys.exit("::error::no Deployment was checked — the glob matched nothing, which is not a pass")
+          print(f"checked {checked} Deployment(s)")
+          if failures:
+              for f in failures:
+                  print(f"::error::{f}")
+              sys.exit(1)
+          print("every workload security invariant holds")
+          PY
+
+      # ── NetworkPolicy: the AND/OR mistake, specifically ─────────────────────────────
+      - name: Assert the namespace default-denies and the Traefik rule is not over-broad
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob, sys, yaml
+
+          failures, seen = [], 0
+          for path in sorted(glob.glob('rendered/apps-*.yaml')):
+              policies = [d for d in yaml.safe_load_all(open(path)) if d and d.get('kind') == 'NetworkPolicy']
+              names = {p['metadata']['name'] for p in policies}
+              if 'renvor-site-default-deny' not in names:
+                  failures.append(f"{path}: no default-deny NetworkPolicy")
+              for p in policies:
+                  seen += 1
+                  name = p['metadata']['name']
+                  spec = p['spec']
+                  if name.endswith('default-deny'):
+                      if sorted(spec.get('policyTypes', [])) != ['Egress', 'Ingress']:
+                          failures.append(f"{path}::{name}: must deny both Ingress and Egress")
+                      if spec.get('ingress') or spec.get('egress'):
+                          failures.append(f"{path}::{name}: a default-deny policy must carry no rules")
+                  if name.endswith('allow-traefik'):
+                      if spec.get('egress'):
+                          failures.append(f"{path}::{name}: must not open egress")
+                      for rule in spec.get('ingress', []):
+                          for src in rule.get('from', []):
+                              # THE CHECK THAT MATTERS. Two selectors in ONE `from` element are
+                              # ANDed; split across two elements they are ORed, which permits any
+                              # pod in kube-system AND any traefik-labelled pod anywhere. The two
+                              # look nearly identical in review and differ enormously in effect.
+                              if set(src) != {'namespaceSelector', 'podSelector'}:
+                                  failures.append(
+                                      f"{path}::{name}: each `from` element must AND a namespaceSelector "
+                                      f"with a podSelector; found {sorted(src)}")
+          if seen == 0:
+              sys.exit("::error::no NetworkPolicy was checked — that is not a pass")
+          print(f"checked {seen} NetworkPolicy object(s)")
+          if failures:
+              for f in failures:
+                  print(f"::error::{f}")
+              sys.exit(1)
+          print("network policy invariants hold")
+          PY
+
+      # ── Duplicate resources ─────────────────────────────────────────────────────────
+      - name: Detect duplicate resources
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob, sys, yaml
+          from collections import Counter
+          bad = False
+          for path in sorted(glob.glob('rendered/*.yaml')):
+              keys = []
+              for d in yaml.safe_load_all(open(path)):
+                  if not d: continue
+                  m = d.get('metadata', {})
+                  keys.append((d.get('apiVersion'), d.get('kind'), m.get('namespace', ''), m.get('name')))
+              dupes = [k for k, n in Counter(keys).items() if n > 1]
+              if dupes:
+                  bad = True
+                  for k in dupes:
+                      print(f"::error::{path}: duplicate resource {k}")
+              print(f"  {path}: {len(keys)} resources, {len(dupes)} duplicates")
+          sys.exit(1 if bad else 0)
+          PY
+
+      # ── Nothing may reach outside Renvor's own namespaces ───────────────────────────
+      - name: Assert the blast radius
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob, sys, yaml
+          ALLOWED = {'renvor-site', 'renvor-site-staging', 'flux-system', ''}
+          bad = []
+          for path in sorted(glob.glob('rendered/*.yaml')):
+              for d in yaml.safe_load_all(open(path)):
+                  if not d: continue
+                  ns = d.get('metadata', {}).get('namespace', '')
+                  kind, name = d.get('kind'), d.get('metadata', {}).get('name')
+                  if ns not in ALLOWED:
+                      bad.append(f"{path}: {kind}/{name} targets namespace {ns!r}")
+                  # A cluster-scoped object is not forbidden outright, but it must be named here
+                  # deliberately rather than arriving by accident.
+                  if kind in ('ClusterRole', 'ClusterRoleBinding', 'ClusterIssuer', 'Namespace') and kind != 'Namespace':
+                      bad.append(f"{path}: cluster-scoped {kind}/{name} — this repository creates none")
+          if bad:
+              for b in bad: print(f"::error::{b}")
+              sys.exit(1)
+          print("every object targets a Renvor namespace; no cluster-scoped object is created")
+          PY
+
+      # ── Secrets ─────────────────────────────────────────────────────────────────────
+      # The binary from a pinned release with a verified checksum, matching how the framework
+      # repository does it. An unverified download in the job that performs secret scanning
+      # would undermine the very check it exists to run — and the action variant additionally
+      # gates on an organisation licence key, which is a dependency this repository does not
+      # need to acquire.
+      - name: Install gitleaks 8.30.1
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          set -euo pipefail
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL "$url" -o gitleaks.tar.gz
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          install -m 0755 gitleaks /usr/local/bin/gitleaks
+          rm -f gitleaks gitleaks.tar.gz
+          gitleaks version
+
+      - name: Scan the working tree and the history for secrets
+        run: |
+          set -euo pipefail
+          gitleaks dir . --redact --verbose --exit-code 1
+          gitleaks git . --redact --verbose --exit-code 1
+
+      - name: Assert no Secret object and no inline credential
+        run: |
+          set -euo pipefail
+          # A Secret manifest here would mean a credential in Git, ciphertext or not.
+          if grep -rn '^kind: Secret' rendered/ apps/ clusters/ 2>/dev/null; then
+            echo "::error::a Secret manifest is present; cluster secrets are managed in the cluster"
+            exit 1
+          fi
+          # Flux must reach the source repository anonymously.
+          if grep -rn 'secretRef' clusters/ 2>/dev/null; then
+            echo "::error::a secretRef appears in the cluster configuration; the source is public and needs none"
+            exit 1
+          fi
+          echo "no Secret manifest, no secretRef"
+
+      - name: Upload the rendered manifests
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rendered-manifests
+          path: rendered/
+          retention-days: 30
+          if-no-files-found: error

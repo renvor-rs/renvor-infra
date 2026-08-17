@@ -1,0 +1,26 @@
+# Production: the same base, the same digest staging proved, plus the parts that expose it.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: renvor-site
+
+resources:
+  - namespace.yaml
+  - ../../base
+  - issuer.yaml
+  - certificate.yaml
+  - middleware.yaml
+  - ingress.yaml
+
+# THE SAME DIGEST STAGING RAN. Promotion is copying this value across, never rebuilding — a
+# rebuild produces a different digest, which means production would run something no staging
+# environment ever saw. No tag, ever.
+images:
+  - name: ghcr.io/renvor-rs/renvor-site
+    digest: sha256:PLACEHOLDER_REPLACED_BEFORE_MERGE
+
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/instance: renvor-site-production
+      renvor.dev/environment: production

@@ -1,0 +1,13 @@
+# The only path Flux reconciles on this cluster.
+#
+# It contains the source definition and the two Kustomizations, and nothing else. In
+# particular it does NOT include `flux-system/` — the controllers are bootstrapped by hand and
+# are not managed by themselves, so that a bad commit cannot take down the thing that would
+# have to apply the fix.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - gitrepository.yaml
+  - staging.yaml
+  - production.yaml
