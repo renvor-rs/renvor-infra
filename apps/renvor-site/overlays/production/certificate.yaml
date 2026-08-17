@@ -27,10 +27,20 @@ spec:
     - renvor.dev
     - www.renvor.dev
   issuerRef:
-    # Switched to `letsencrypt-prod` in a separate, reviewed commit once a staging issuance has
-    # proven the HTTP-01 path end to end. Promoting both at once would mean discovering a
-    # misconfiguration against the directory that rate-limits failures.
-    name: letsencrypt-staging
+    # PROMOTED FROM `letsencrypt-staging` ONCE THE STAGING ISSUANCE SUCCEEDED.
+    #
+    # Going straight to production would have spent real rate limit on two misconfigurations
+    # that the staging directory absorbed for free:
+    #
+    #   1. the solver's default NodePort Service was refused by `services.nodeports: 0`, so the
+    #      challenge never started;
+    #   2. the namespace default-deny blocked Traefik from reaching the solver on 8089, so the
+    #      challenge answered 502.
+    #
+    # Both were found and fixed against the staging directory. Let's Encrypt counts failed
+    # validations against a per-account-per-hostname limit, so those two rounds would have
+    # consumed production budget for no certificate. The staging step earned its place.
+    name: letsencrypt-prod
     kind: Issuer
   privateKey:
     algorithm: ECDSA
