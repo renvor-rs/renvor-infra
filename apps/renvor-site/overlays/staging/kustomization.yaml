@@ -24,7 +24,7 @@ resources:
 # memory.
 images:
   - name: ghcr.io/renvor-rs/renvor-site
-    digest: sha256:PLACEHOLDER_REPLACED_BEFORE_MERGE
+    digest: sha256:56446da7c16e155396114e185206837710eee1587d3b58ef8e5ecca96ddb84af
 
 patches:
   # One replica. Staging exists to prove the image runs, and a second copy proves nothing
