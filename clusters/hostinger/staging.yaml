@@ -1,0 +1,48 @@
+# Staging reconciliation.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: renvor-site-staging
+  namespace: flux-system
+spec:
+  interval: 10m
+  retryInterval: 1m
+  timeout: 5m
+  sourceRef:
+    kind: GitRepository
+    name: renvor-infra
+  path: ./apps/renvor-site/overlays/staging
+
+  # Pruning is ON, and its scope is the thing to understand.
+  #
+  # Flux labels every object it applies from THIS Kustomization with an identifier unique to
+  # it, and prunes only objects carrying that label which are no longer in the source. It
+  # cannot delete an object it did not create — the 28 running pods in `gitlab`, `attaa`,
+  # `codexhub`, and `portfolio` carry no such label and are invisible to it.
+  #
+  # With pruning off, removing a manifest from Git would leave the object running forever, and
+  # the cluster would diverge from the repository silently. That is the failure this repository
+  # exists to prevent.
+  prune: true
+
+  # Block until the Deployment is actually Available, rather than reporting success as soon as
+  # the objects are accepted by the API server. Without this, "reconciled" means "the YAML was
+  # applied", which is not the same as "the site is serving".
+  wait: true
+
+  # Explicit health gate on top of `wait`, naming what must be healthy. If the Deployment never
+  # becomes Available the Kustomization goes NotReady with a reason, instead of going Ready
+  # while nothing serves.
+  healthChecks:
+    - apiVersion: apps/v1
+      kind: Deployment
+      name: renvor-site
+      namespace: renvor-site-staging
+
+  # Restrict every object this Kustomization applies to one namespace. A manifest that tried to
+  # create something elsewhere — by accident or otherwise — is rejected rather than applied.
+  targetNamespace: renvor-site-staging
+
+  # Refuse to apply anything the manifests do not fully specify. Without this, a partially
+  # applied set can be reported as reconciled.
+  force: false

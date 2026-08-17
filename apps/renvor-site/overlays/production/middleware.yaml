@@ -1,0 +1,94 @@
+# Traefik middlewares, namespace-scoped.
+#
+# WHAT IS DELIBERATELY NOT HERE: Content-Security-Policy.
+#
+# The CSP is derived from the built site — it contains SHA-256 hashes of the inline scripts in
+# the HTML — and it is generated during the image build and served by the origin. Setting it
+# here as well would create a second copy that drifts the moment the site changes, and the
+# failure mode of a stale hash-based CSP is a blank page. One canonical policy, generated from
+# the bytes it protects, served by the process serving those bytes. The image publishes it at
+# `/_csp/policy.txt` so it can be read from outside.
+#
+# The headers below are the ones that do NOT depend on build output, and they are set at the
+# edge as defence in depth: the origin sets them too, so a middleware that is accidentally
+# detached degrades to "still correct" rather than "silently unprotected".
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: renvor-site-headers
+  namespace: renvor-site
+  labels:
+    app.kubernetes.io/name: renvor-site
+    app.kubernetes.io/part-of: renvor
+    app.kubernetes.io/managed-by: flux
+spec:
+  headers:
+    contentTypeNosniff: true
+    frameDeny: true
+    referrerPolicy: no-referrer
+    permissionsPolicy: >-
+      accelerometer=(), autoplay=(), camera=(), display-capture=(), encrypted-media=(),
+      fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), midi=(),
+      payment=(), picture-in-picture=(), publickey-credentials-get=(), screen-wake-lock=(),
+      usb=(), xr-spatial-tracking=()
+    customResponseHeaders:
+      # Do not advertise the server. It is not a security control, but there is no reason to
+      # publish the attack surface either.
+      Server: ''
+      X-Powered-By: ''
+    # HSTS IS DELIBERATELY ABSENT UNTIL THE CERTIFICATE IS TRUSTED AND RENEWAL IS PROVEN.
+    #
+    # `Strict-Transport-Security` is close to irreversible: once a browser has cached it, that
+    # browser refuses plain HTTP to this host for the max-age, and there is no way to reach the
+    # ones that already cached it. Enabling it before a trusted certificate exists would lock
+    # readers out of a site that cannot yet serve them.
+    #
+    # When it is enabled, in a separate reviewed change:
+    #   - a short max-age first, raised only after a renewal has been observed to succeed;
+    #   - NO `includeSubDomains` — `docs.renvor.dev` is undeployed, and asserting HSTS over a
+    #     subdomain that has no certificate would make it unreachable the day it is deployed;
+    #   - NO `preload` — that is a submission to a list baked into browser binaries, effectively
+    #     permanent, and it requires `includeSubDomains`.
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: renvor-site-www-redirect
+  namespace: renvor-site
+  labels:
+    app.kubernetes.io/name: renvor-site
+    app.kubernetes.io/part-of: renvor
+    app.kubernetes.io/managed-by: flux
+spec:
+  redirectRegex:
+    # Anchored, and the capture group is the entire path-and-query. `(.*)` after the host means
+    # `/plan?x=1` is preserved as `/plan?x=1` rather than dropped — a redirect that silently
+    # loses the path sends every deep link to the home page and looks like it works.
+    regex: '^https?://www\.renvor\.dev(/.*)?$'
+    replacement: 'https://renvor.dev${1}'
+    # 301, not 302. The canonical host is a permanent decision, and a permanent redirect is
+    # what lets caches and search engines consolidate on it.
+    permanent: true
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: renvor-site-ratelimit
+  namespace: renvor-site
+  labels:
+    app.kubernetes.io/name: renvor-site
+    app.kubernetes.io/part-of: renvor
+    app.kubernetes.io/managed-by: flux
+spec:
+  # Conservative on purpose. A static landing page loads roughly 20 subresources, so a genuine
+  # first visit is a burst of ~20 requests followed by near-silence. `average` is the sustained
+  # per-source rate and `burst` absorbs that initial page load without touching anyone real.
+  #
+  # This is not DDoS protection — there is no edge in front of this origin, and a middleware in
+  # the request path cannot be one. It bounds accidental hammering and cheap scraping, and that
+  # is the whole claim.
+  rateLimit:
+    average: 50
+    burst: 100
+    period: 1m

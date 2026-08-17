@@ -1,0 +1,64 @@
+# A namespace-scoped Issuer, not a ClusterIssuer.
+#
+# The cluster already has a working `letsencrypt-prod` ClusterIssuer serving unrelated domains.
+# Renvor does not use it and does not add a second one, for two reasons:
+#
+#   1. **Blast radius.** A ClusterIssuer is a cluster-wide object; editing one to suit Renvor
+#      would put every other certificate on this shared cluster at risk of a Renvor mistake.
+#      An Issuer lives in this namespace and can only issue for requests from it.
+#   2. **Reversibility.** Removing Renvor from this cluster should delete Renvor's objects and
+#      nothing else. A namespaced Issuer disappears with the namespace; a ClusterIssuer is
+#      residue somebody has to remember to clean up.
+#
+# The private key for the ACME account is created by cert-manager in this namespace and is
+# never read, printed, or committed.
+#
+# TWO ISSUERS, and the order matters. Let's Encrypt production applies rate limits that are
+# measured in *failures per week*, so the first attempt at a new domain is made against the
+# staging directory — which issues an untrusted certificate but validates the entire HTTP-01
+# path for real. Only once that succeeds is production used. Skipping the rehearsal risks
+# burning a weekly allowance on a misconfiguration a staging run would have caught for free.
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: letsencrypt-staging
+  namespace: renvor-site
+  labels:
+    app.kubernetes.io/name: renvor-site
+    app.kubernetes.io/part-of: renvor
+    app.kubernetes.io/managed-by: flux
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: admin@ahmedanbar.dev
+    privateKeySecretRef:
+      name: letsencrypt-staging-account-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: traefik
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: letsencrypt-prod
+  namespace: renvor-site
+  labels:
+    app.kubernetes.io/name: renvor-site
+    app.kubernetes.io/part-of: renvor
+    app.kubernetes.io/managed-by: flux
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: admin@ahmedanbar.dev
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      # HTTP-01 rather than DNS-01, deliberately. DNS-01 would require a Cloudflare API
+      # credential stored in the cluster; HTTP-01 requires only that port 80 reaches Traefik,
+      # which it already does. **No long-lived infrastructure credential is created**, which is
+      # a standing constraint on this deployment rather than a convenience.
+      - http01:
+          ingress:
+            ingressClassName: traefik

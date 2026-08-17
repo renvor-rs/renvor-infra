@@ -1,0 +1,45 @@
+# One certificate covering both hostnames.
+#
+# `www.renvor.dev` needs its own TLS even though every request to it is redirected: the
+# redirect is an HTTPS response, so the handshake has to succeed before the browser will read
+# it. A redirect served over a certificate error is a redirect nobody follows.
+#
+# No wildcard. A wildcard would require DNS-01 and therefore a stored Cloudflare credential;
+# two explicit names need only HTTP-01. It also keeps the certificate's scope equal to what is
+# actually deployed.
+#
+# The resulting Secret is created and managed by cert-manager in this namespace. **Its contents
+# are never read, printed, logged, or committed.** Verification looks at the Certificate's
+# `Ready` condition and at what the server presents on the wire — never at the key.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: renvor-dev-tls
+  namespace: renvor-site
+  labels:
+    app.kubernetes.io/name: renvor-site
+    app.kubernetes.io/part-of: renvor
+    app.kubernetes.io/managed-by: flux
+spec:
+  secretName: renvor-dev-tls
+  commonName: renvor.dev
+  dnsNames:
+    - renvor.dev
+    - www.renvor.dev
+  issuerRef:
+    # Switched to `letsencrypt-prod` in a separate, reviewed commit once a staging issuance has
+    # proven the HTTP-01 path end to end. Promoting both at once would mean discovering a
+    # misconfiguration against the directory that rate-limits failures.
+    name: letsencrypt-staging
+    kind: Issuer
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    # A fresh key on every renewal. Marginally more work for cert-manager, and it bounds the
+    # value of a key that leaked without anyone noticing to a single certificate lifetime.
+    rotationPolicy: Always
+  # cert-manager's defaults are 90-day certificates renewed at 30 days remaining. Stated
+  # explicitly so a renewal failure has a documented 30-day window to be noticed in, rather
+  # than an implicit one a reader has to know.
+  duration: 2160h    # 90d
+  renewBefore: 720h  # 30d

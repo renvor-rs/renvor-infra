@@ -1,0 +1,24 @@
+# ClusterIP, deliberately.
+#
+# Nothing outside the cluster talks to this Service. Traefik does, from `kube-system`, and the
+# NetworkPolicy alongside this file makes that the only thing that can. A LoadBalancer or
+# NodePort here would open a second path to the pods that bypasses the ingress — and therefore
+# bypasses TLS, the security headers, and the `www` redirect.
+apiVersion: v1
+kind: Service
+metadata:
+  name: renvor-site
+  labels:
+    app.kubernetes.io/name: renvor-site
+    app.kubernetes.io/component: web
+    app.kubernetes.io/part-of: renvor
+    app.kubernetes.io/managed-by: flux
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: renvor-site
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP

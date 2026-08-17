@@ -1,0 +1,30 @@
+# Shared definition for both environments.
+#
+# It deliberately carries NO namespace and NO image digest. Each overlay supplies both, so
+# there is no default that could be inherited by accident — an overlay that forgets either one
+# fails to build rather than deploying into the wrong place or from an unpinned reference.
+#
+# There is also NO Ingress, Certificate, or Issuer here. Those exist only in production:
+# staging is intentionally unreachable from the internet, and the surest way to keep it that
+# way is for the manifests that would expose it not to exist in the shared layer.
+#
+# NO PodDisruptionBudget either, and that is a decision rather than an omission. The cluster
+# has one node. Any PDB over a 2-replica Deployment on a single node blocks `kubectl drain`
+# permanently: evicting the second pod always violates the budget, because there is nowhere for
+# the first to reschedule. A PDB here would not protect availability, it would prevent node
+# maintenance — so it is left out until a second node makes it mean something.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - serviceaccount.yaml
+  - deployment.yaml
+  - service.yaml
+  - networkpolicy.yaml
+  - resourcequota.yaml
+  - limitrange.yaml
+
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/part-of: renvor

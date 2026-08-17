@@ -1,0 +1,30 @@
+# The one source Flux is allowed to read.
+#
+# **Public HTTPS, and no credential.** There is no `secretRef`, no deploy key, and no personal
+# access token — `renvor-rs/renvor-infra` is a public repository, so anonymous read is enough.
+# That is a deliberate design constraint rather than a convenience: a credential that does not
+# exist cannot leak, cannot expire unnoticed, and does not need a rotation schedule. It also
+# means this cluster holds no GitHub identity at all.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: renvor-infra
+  namespace: flux-system
+spec:
+  interval: 5m
+  url: https://github.com/renvor-rs/renvor-infra
+  ref:
+    # A branch, not a tag or a commit. `main` is protected by an active ruleset requiring a
+    # pull request, signed commits, linear history, and conversation resolution, with zero
+    # bypass actors — so "what is on main" is already a reviewed artifact, and following it is
+    # following the review.
+    branch: main
+  # Fetch only what is needed to read the tree. No submodules: this repository has none, and
+  # enabling them would let a future submodule pull in code from a source nobody reviewed here.
+  ignore: |
+    # Exclude everything, then re-include only what the cluster reconciles. An allow-list means
+    # a new top-level directory arrives ignored rather than arriving live.
+    /*
+    !/apps
+    !/clusters
+  timeout: 60s

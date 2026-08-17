@@ -1,0 +1,72 @@
+# Default deny, then one hole.
+#
+# Two policies rather than one, because they answer different questions and should be readable
+# — and removable — independently.
+#
+# ENFORCEMENT IS REAL ON THIS CLUSTER, and that was checked rather than assumed. k3s ships
+# flannel, which does not implement NetworkPolicy on its own; enforcement comes from the
+# embedded kube-router controller, which is active unless `--disable-network-policy` is passed.
+# It is not passed here, and the dataplane confirms it: 468 kube-router rules were present at
+# preflight, including `KUBE-NWPLCY-COMMON`, `KUBE-NWPLCY-DEFAULT`, and per-pod `KUBE-POD-FW-*`
+# chains. A NetworkPolicy on a cluster that silently ignores them is decoration, so this was
+# verified before being relied on — and it is proven again from inside the namespace during
+# staging validation.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: renvor-site-default-deny
+  labels:
+    app.kubernetes.io/name: renvor-site
+    app.kubernetes.io/part-of: renvor
+    app.kubernetes.io/managed-by: flux
+spec:
+  # An empty podSelector selects every pod in the namespace, so this also covers anything added
+  # here later — a new workload arrives denied rather than arriving open.
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  # No `ingress:` and no `egress:` rules at all. That is the deny: with both policy types
+  # declared and no rules, nothing is permitted in either direction.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: renvor-site-allow-traefik
+  labels:
+    app.kubernetes.io/name: renvor-site
+    app.kubernetes.io/part-of: renvor
+    app.kubernetes.io/managed-by: flux
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: renvor-site
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        # Both selectors inside ONE `from` element, which ANDs them: traffic must come from a
+        # pod labelled as Traefik *and* in the kube-system namespace. Written as two separate
+        # list elements they would OR, permitting any pod in kube-system and any Traefik-labelled
+        # pod anywhere — a much wider hole that looks identical at a glance. This is the single
+        # easiest NetworkPolicy mistake to make and the hardest to see in review.
+        - namespaceSelector:
+            matchLabels:
+              # The label Kubernetes injects automatically on every namespace, verified present
+              # on kube-system at preflight. Traefik's own Helm labels are not on the namespace.
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+      ports:
+        - protocol: TCP
+          port: 8080
+
+# NO EGRESS RULE, deliberately, and that includes DNS.
+#
+# The usual reflex is to allow egress to CoreDNS on 53, because most workloads cannot function
+# without name resolution. This one can: it opens no outbound connection of any kind. It reads
+# files from its own image and writes HTTP responses back down connections Traefik opened. It
+# resolves no hostname, calls no API, and fetches no dependency.
+#
+# So `egress: []` is not an oversight to be corrected later — it is the strongest statement
+# available about what this workload does, and staging validation proves it by confirming the
+# pods stay healthy with all egress denied.

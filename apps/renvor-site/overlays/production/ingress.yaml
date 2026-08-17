@@ -1,0 +1,111 @@
+# Traefik IngressRoute rather than a networking.k8s.io Ingress.
+#
+# The cluster runs Traefik 3.6.13 with its own CRDs installed and no Gateway API GatewayClass
+# (checked: `kubectl get gatewayclass` returns nothing). Middlewares — the www redirect, the
+# security headers, the rate limit — attach to an IngressRoute natively, whereas on a plain
+# Ingress they attach through provider-specific annotations, which is the same coupling
+# expressed less legibly.
+#
+# THREE ROUTES, and each exists for a distinct reason.
+---
+# 1. HTTP on `renvor.dev` and `www.renvor.dev` — redirect to HTTPS.
+#
+# This must NOT be a blanket redirect of every path: the ACME HTTP-01 challenge is served over
+# plain HTTP at `/.well-known/acme-challenge/`, and redirecting it to HTTPS breaks issuance —
+# and, worse, breaks *renewal* 60 days later, long after anyone is watching. cert-manager
+# creates its own higher-priority route for that path while a challenge is in flight; the
+# `priority` here is set low so it can never outrank it.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: renvor-site-http
+  namespace: renvor-site
+  labels:
+    app.kubernetes.io/name: renvor-site
+    app.kubernetes.io/part-of: renvor
+    app.kubernetes.io/managed-by: flux
+spec:
+  entryPoints: [web]
+  routes:
+    - kind: Rule
+      match: Host(`renvor.dev`) || Host(`www.renvor.dev`)
+      priority: 1
+      middlewares:
+        - name: renvor-site-https-redirect
+      services:
+        # Never actually reached — the middleware answers first — but a route must name a
+        # service, and naming the real one means a misconfigured middleware degrades to serving
+        # the site over HTTP rather than to a 502.
+        - name: renvor-site
+          port: 80
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: renvor-site-https-redirect
+  namespace: renvor-site
+  labels:
+    app.kubernetes.io/name: renvor-site
+    app.kubernetes.io/part-of: renvor
+    app.kubernetes.io/managed-by: flux
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+---
+# 2. HTTPS on `www.renvor.dev` — permanent redirect to the canonical host.
+#
+# Higher priority than the apex route so it matches first. It terminates TLS with the same
+# certificate, because the browser completes the handshake before it will read the redirect.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: renvor-site-www
+  namespace: renvor-site
+  labels:
+    app.kubernetes.io/name: renvor-site
+    app.kubernetes.io/part-of: renvor
+    app.kubernetes.io/managed-by: flux
+spec:
+  entryPoints: [websecure]
+  routes:
+    - kind: Rule
+      match: Host(`www.renvor.dev`)
+      priority: 20
+      middlewares:
+        - name: renvor-site-www-redirect
+        - name: renvor-site-headers
+      services:
+        - name: renvor-site
+          port: 80
+  tls:
+    secretName: renvor-dev-tls
+---
+# 3. HTTPS on `renvor.dev` — the site itself.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: renvor-site
+  namespace: renvor-site
+  labels:
+    app.kubernetes.io/name: renvor-site
+    app.kubernetes.io/part-of: renvor
+    app.kubernetes.io/managed-by: flux
+spec:
+  entryPoints: [websecure]
+  routes:
+    - kind: Rule
+      match: Host(`renvor.dev`)
+      priority: 10
+      middlewares:
+        - name: renvor-site-ratelimit
+        - name: renvor-site-headers
+      services:
+        - name: renvor-site
+          port: 80
+  tls:
+    secretName: renvor-dev-tls
+
+# NO ROUTE FOR docs.renvor.dev. It resolves to this same origin and currently returns Traefik's
+# default 404. `renvor-rs/renvor-docs` is commit-empty and its migration is gated on T108, so
+# claiming the hostname here would deploy nothing while making the gate look closed.

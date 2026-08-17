@@ -105,3 +105,9 @@ desktop.ini
 tmp/
 temp/
 .cache/
+
+# Output of `kustomize build`, written by CI and when validating locally. It is a rendering
+# of what is already in `apps/`, so committing it would create a second copy that silently
+# goes stale — and a reviewer reading a stale copy would be reviewing a deployment that no
+# longer exists.
+rendered/

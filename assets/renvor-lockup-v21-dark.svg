@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 160" role="img" aria-labelledby="renvor-lockup-v21-dark-title renvor-lockup-v21-dark-desc">
+  <title id="renvor-lockup-v21-dark-title">Renvor Ordered Register horizontal lockup for dark fields</title>
+  <desc id="renvor-lockup-v21-dark-desc">The seven ice-cyan billets are paired with the low and wide custom path-only renvor wordmark.</desc>
+  <path fill="#70D6E5" d="M14 106H26V142H14Z"/><path fill="#70D6E5" d="M34 82H46V142H34Z"/><path fill="#70D6E5" d="M54 54H66V142H54Z"/><path fill="#70D6E5" d="M74 32H86V142H74Z"/><path fill="#70D6E5" d="M94 36H106V142H94Z"/><path fill="#70D6E5" d="M114 64H126V142H114Z"/><path fill="#70D6E5" d="M134 94H146V142H134Z"/>
+  <g transform="translate(190 40)" fill="#F5F1E8">
+    <path d="M4 68V24H17V31C28 22 42 21 58 26L53 38C39 33 29 36 17 49V68Z"/><path fill-rule="evenodd" d="M112 21C133 21 147 31 147 48V50H92C94 59 102 62 113 62C124 62 132 59 139 53L147 62C138 70 126 73 112 73C91 73 77 63 77 47C77 31 91 21 112 21ZM92 41H132C129 34 122 31 112 31C102 31 95 34 92 41Z"/><path d="M157 68V24H170V31C179 24 188 21 199 21C218 21 228 31 228 49V68H214V51C214 39 208 34 198 34C181 34 171 42 171 56V68Z"/><path d="M236 27L250 22L274 57C277 62 281 62 284 57L307 22L321 27L293 68H265Z"/><path fill-rule="evenodd" d="M367 21C389 21 403 31 403 47C403 63 389 73 367 73C345 73 331 63 331 47C331 31 345 21 367 21ZM367 34C353 34 346 38 346 47C346 56 353 60 367 60C381 60 388 56 388 47C388 38 381 34 367 34Z"/><path d="M413 68V24H426V31C437 22 451 21 467 26L462 38C448 33 438 36 426 49V68Z"/>
+  </g>
+</svg>
