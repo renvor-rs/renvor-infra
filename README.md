@@ -16,13 +16,23 @@
 
 > ## Status
 >
-> **Declared, not yet reconciled.** This repository now contains the complete Kustomize
-> definition for the landing site — base, staging overlay, production overlay, and the Flux
-> bootstrap — but **nothing has been applied to any cluster from it yet**, and
-> `https://renvor.dev` does not serve Renvor content.
+> **Deployed and reconciling.** `https://renvor.dev` serves the Renvor landing site, over a
+> Let's Encrypt certificate, from this repository.
 >
-> This notice is updated only after a deployment has been verified from outside the cluster.
-> Until then, treat every statement below as a description of intent.
+> | | |
+> |---|---|
+> | Image | `ghcr.io/renvor-rs/renvor-site@sha256:56446da7c16e155396114e185206837710eee1587d3b58ef8e5ecca96ddb84af` |
+> | Certificate | Let's Encrypt `CN=YE1`, `renvor.dev` + `www.renvor.dev`, expires 2026-11-15 |
+> | Reconciled by | Flux v2.9.4 as `flux-system/renvor-reconciler` — never as cluster-admin |
+>
+> Verified from outside the cluster: TLS chain `Verify return code: 0 (ok)` over TLSv1.3;
+> `http://` and `https://www.` both 301 to `https://renvor.dev` preserving path and query;
+> the `Content-Security-Policy` header byte-identical to the published `/_csp/policy.txt`;
+> the digest running in both namespaces identical to the one whose provenance was verified.
+> `docs.renvor.dev` returns 404 and is deliberately unrouted.
+>
+> **HSTS is not enabled yet.** It is close to irreversible once a browser caches it, so it
+> waits until a renewal has been observed to succeed. See `overlays/production/middleware.yaml`.
 
 ## Layout
 
