@@ -35,14 +35,22 @@ spec:
   # applied", which is not the same as "the site is serving".
   wait: true
 
-  # Explicit health gate on top of `wait`, naming what must be healthy. If the Deployment never
-  # becomes Available the Kustomization goes NotReady with a reason, instead of going Ready
-  # while nothing serves.
-  healthChecks:
-    - apiVersion: apps/v1
-      kind: Deployment
-      name: renvor-site
-      namespace: renvor-site-staging
+  # NO `healthChecks` BLOCK, DELIBERATELY.
+  #
+  # It would be dead configuration. The vendored CRD is explicit — `flux-system.yaml`, the
+  # `wait` property: *"Wait instructs the controller to check the health of all the reconciled
+  # resources. When enabled, the HealthChecks are ignored."* An earlier version of this file
+  # carried a `healthChecks` entry naming this Deployment, which read as an extra safeguard and
+  # was silently discarded on every reconcile.
+  #
+  # `wait: true` already covers it, and covers it better: it health-checks *every* applied
+  # object rather than the one somebody remembered to list. Deployment is one of the few kinds
+  # kstatus understands natively, resolving its ReplicaSets and Pods — which is why the
+  # reconciler needs read access to both.
+  #
+  # Production additionally uses `healthCheckExprs` for its Certificate, because kstatus has no
+  # cert-manager reader and would otherwise call an unissued certificate healthy. Staging has no
+  # Certificate, so it needs no expression.
 
   # Restrict every object this Kustomization applies to one namespace. A manifest that tried to
   # create something elsewhere — by accident or otherwise — is rejected rather than applied.

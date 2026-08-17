@@ -29,10 +29,15 @@ BOOTSTRAP = "clusters/hostinger/flux-system/kustomization.yaml"
 # The rendered overlays to hand the checker, taken from argv so CI and a local run can each use
 # whatever filenames their render step produced. The first is the one the two "something
 # forbidden reappears in a reconciled overlay" controls append to.
-RENDERS = sys.argv[1:] or ["rendered/staging.yaml", "rendered/production.yaml"]
-STAGING_RENDER = RENDERS[0]
+# Arguments are `namespace=path`, matching check-tenancy.py — the two Roles are deliberately
+# different, so the checker needs to know which render belongs to which namespace.
+ARGS = sys.argv[1:] or ["renvor-site-staging=rendered/staging.yaml",
+                        "renvor-site=rendered/production.yaml"]
+OVERLAY_FOR = dict(a.split("=", 1) for a in ARGS)
+RENDERS = list(OVERLAY_FOR.values())
+STAGING_RENDER = OVERLAY_FOR["renvor-site-staging"]
 # The production render — the only one carrying IngressRoutes.
-PROD_RENDER = RENDERS[1] if len(RENDERS) > 1 else RENDERS[0]
+PROD_RENDER = OVERLAY_FOR["renvor-site"]
 
 
 def edit(root: pathlib.Path, rel: str, fn) -> None:
@@ -128,7 +133,27 @@ CONTROLS = [
         # substring search over the file still finds all three and reports success. The built
         # cluster would silently fall back to cluster-admin reconciliation.
         "the patches block is deleted but the flags survive in comments",
-        lambda r: edit(r, BOOTSTRAP, lambda t: t[:t.index("patches:")] + "patches: []\n"),
+        lambda r: edit(r, BOOTSTRAP, lambda t: t[:t.index("patches:")] + "patches: []\n"
+                       # The flags MUST survive as comments, or this control degenerates into
+                       # "the flags were deleted" — which the old substring check also caught,
+                       # and which therefore proves nothing about the new structural one.
+                       + "# --default-service-account=renvor-reconciler\n"
+                       + "# --no-cross-namespace-refs=true\n"
+                       + "# --no-remote-bases=true\n"),
+    ),
+    (
+        # The two Roles are intentionally different. If staging regained traefik.io, a staging
+        # manifest could create an IngressRoute claiming `Host(`renvor.dev`)` — an allow-listed
+        # hostname, so the route gate would pass it — and contend with production for real
+        # traffic through the shared Traefik.
+        "staging regains a grant only production needs",
+        lambda r: edit(r, TENANCY,
+                       lambda t: t.replace(
+                           "  # NO cert-manager AND NO traefik.io HERE, DELIBERATELY.",
+                           "  - apiGroups: ['traefik.io']\n"
+                           "    resources: ['ingressroutes', 'middlewares']\n"
+                           "    verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete']\n"
+                           "  # NO cert-manager AND NO traefik.io HERE, DELIBERATELY.", 1)),
     ),
     (
         "the health-check read on pods is removed (wait: true would fail closed)",
@@ -211,6 +236,45 @@ CONTROLS = [
                                            "match: HostRegexp(`^.+$`)", 1)),
     ),
     (
+        # The disjunction evasions. Each keeps a legitimate allow-listed Host() so a check that
+        # merely looks for one still passes — while the second arm matches every hostname on
+        # the cluster.
+        "a match arm ORs in a catch-all PathPrefix",
+        lambda r: edit(r, PROD_RENDER,
+                       lambda t: t.replace("match: Host(`renvor.dev`)",
+                                           "match: Host(`renvor.dev`) || PathPrefix(`/`)", 1)),
+    ),
+    (
+        "a match arm ORs in a catch-all ClientIP",
+        lambda r: edit(r, PROD_RENDER,
+                       lambda t: t.replace("match: Host(`renvor.dev`)",
+                                           "match: Host(`renvor.dev`) || ClientIP(`0.0.0.0/0`)", 1)),
+    ),
+    (
+        "a match arm ORs in a Method matcher",
+        lambda r: edit(r, PROD_RENDER,
+                       lambda t: t.replace("match: Host(`renvor.dev`)",
+                                           "match: Host(`renvor.dev`) || Method(`GET`)", 1)),
+    ),
+    (
+        # Total inversion: matches every hostname EXCEPT ours, capturing every co-tenant.
+        # The scalar must be quoted — a bare leading `!` is a YAML tag indicator.
+        "a match rule is negated, inverting it onto every other host",
+        lambda r: edit(r, PROD_RENDER,
+                       lambda t: t.replace("match: Host(`renvor.dev`)",
+                                           "match: '!Host(`renvor.dev`)'", 1)),
+    ),
+    (
+        # A default-deny that selects zero pods denies nothing: same name, same policyTypes,
+        # same empty rule lists, and the entire namespace is exempt.
+        "the default-deny NetworkPolicy is narrowed to select no pods",
+        lambda r: edit(r, PROD_RENDER,
+                       lambda t: t.replace(
+                           "  podSelector: {}\n",
+                           "  podSelector:\n    matchLabels:\n      renvor.dev/nonexistent: 'true'\n",
+                           1)),
+    ),
+    (
         # NetworkPolicies are additive: a second policy can only widen the union.
         "a second NetworkPolicy quietly re-opens egress",
         lambda r: (r / PROD_RENDER).write_text(
@@ -223,7 +287,7 @@ CONTROLS = [
 
 
 def run_checker(root: pathlib.Path) -> tuple[int, str]:
-    proc = subprocess.run([sys.executable, "scripts/check-tenancy.py", *RENDERS],
+    proc = subprocess.run([sys.executable, "scripts/check-tenancy.py", *ARGS],
                           cwd=root, capture_output=True, text=True)
     return proc.returncode, proc.stdout + proc.stderr
 
