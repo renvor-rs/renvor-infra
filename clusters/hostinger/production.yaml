@@ -24,18 +24,32 @@ spec:
   prune: true
   wait: true
 
-  healthChecks:
-    - apiVersion: apps/v1
-      kind: Deployment
-      name: renvor-site
-      namespace: renvor-site
-    # The certificate is a health gate too. Without this the Kustomization would report Ready
-    # while `renvor.dev` served Traefik's default self-signed certificate — the site would be
-    # "deployed" and untrustable, which is the worst of both states.
+  # THE CERTIFICATE GATE IS A CEL EXPRESSION, NOT A `healthChecks` ENTRY, AND BOTH REASONS
+  # MATTER.
+  #
+  # 1. `healthChecks` is dead configuration here. The vendored CRD says so in this repository's
+  #    own bytes — `flux-system/flux-system.yaml`, the `wait` property: *"Wait instructs the
+  #    controller to check the health of all the reconciled resources. When enabled, the
+  #    HealthChecks are ignored."* `wait: true` is set below, so every `healthChecks` entry was
+  #    being silently discarded.
+  #
+  # 2. `wait: true` alone does NOT gate on the certificate being issued. kstatus has no
+  #    cert-manager-aware status reader — the string `cert-manager.io` appears zero times in
+  #    the pinned `kustomize-controller` binary — so a Certificate falls through to the generic
+  #    reader, which checks `deletionTimestamp`, `observedGeneration`, and the standard
+  #    `Reconciling`/`Stalled` conditions. A Certificate sitting at `Ready: False` matches none
+  #    of those and computes as **Current**.
+  #
+  # Together those meant this gate failed OPEN in exactly the way the old comment claimed it
+  # prevented: the Kustomization would report Ready while `renvor.dev` served Traefik's default
+  # self-signed certificate — "deployed" and untrustable, the worst of both states.
+  #
+  # `healthCheckExprs` is evaluated by cel-go, which IS linked into this build, and asserts the
+  # condition that actually means "issued".
+  healthCheckExprs:
     - apiVersion: cert-manager.io/v1
       kind: Certificate
-      name: renvor-dev-tls
-      namespace: renvor-site
+      current: "status.conditions.exists(c, c.type == 'Ready' && c.status == 'True')"
 
   targetNamespace: renvor-site
 

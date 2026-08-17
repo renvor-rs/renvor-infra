@@ -5,7 +5,13 @@ Run from the repository root, passing the rendered *application overlays* — an
 
     kubectl kustomize apps/renvor-site/overlays/staging    > rendered/staging.yaml
     kubectl kustomize apps/renvor-site/overlays/production > rendered/production.yaml
-    python3 scripts/check-tenancy.py rendered/staging.yaml rendered/production.yaml
+    python3 scripts/check-tenancy.py \
+        renvor-site-staging=rendered/staging.yaml \
+        renvor-site=rendered/production.yaml
+
+Each argument is `namespace=path`. The namespace is declared rather than inferred because the
+two Roles are deliberately NOT identical: staging renders no IngressRoute, Middleware,
+Certificate or Issuer, and is granted none of them.
 
 The paths are arguments rather than a glob on purpose. `rendered/` also holds the rendered
 *control plane* — GitRepository and Kustomization objects — which are hand-applied and are
@@ -106,6 +112,10 @@ NEVER_GRANT = {
     "secrets", "namespaces", "nodes", "customresourcedefinitions",
     "clusterroles", "clusterrolebindings", "roles", "rolebindings",
     "persistentvolumes", "storageclasses", "clusterissuers",
+    # Subresources. `serviceaccounts/token` is the sharp one: `create` on it mints a bearer
+    # token for any ServiceAccount in the namespace. The others are the shell-in-the-pod set.
+    "serviceaccounts/token", "pods/exec", "pods/attach", "pods/portforward", "pods/log",
+    "deployments/scale",
 }
 
 REQUIRED_CONTROLLER_ARGS = {
@@ -128,9 +138,46 @@ ALLOWED_ROUTE_HOSTS = {"renvor.dev", "www.renvor.dev"}
 
 # `Host(...)` extraction. Traefik accepts backticks, single and double quotes.
 HOST_CALL = re.compile(r"Host\(\s*([`'\"])([^`'\"]+)\1\s*\)")
-# Matchers that select on something other than an exact host are refused outright: a rule with
-# no Host() term matches on path alone and is therefore global.
+# Matchers that select on something other than an exact host are refused outright.
 FORBIDDEN_MATCHERS = ("HostRegexp", "HostSNIRegexp")
+
+
+def route_is_host_restricted(match: str) -> tuple[bool, str]:
+    """Is this Traefik rule confined to the allow-listed hostnames?
+
+    "CONTAINS AN ALLOWED Host()" IS NOT "RESTRICTED TO ALLOWED HOSTS", and an earlier version of
+    this check conflated them. It asserted that at least one `Host()` was present and that every
+    literal host token was allow-listed — which all of these pass while matching traffic for the
+    whole cluster:
+
+        Host(`renvor.dev`) || PathPrefix(`/`)          the second arm matches every hostname
+        Host(`renvor.dev`) || ClientIP(`0.0.0.0/0`)    likewise
+        Host(`renvor.dev`) || Method(`GET`)            likewise
+        !Host(`renvor.dev`)                            matches everything EXCEPT renvor.dev
+
+    Traefik routes cluster-globally, so any of those inside `renvor-site` — entirely within the
+    reconciler's granted authority — could take a co-tenant's traffic.
+
+    The property that actually holds the boundary is conjunctive: **every top-level `||` arm
+    must itself be pinned to an allowed host**, and negation must not appear at all. `||` cannot
+    simply be banned — the HTTP-to-HTTPS redirect legitimately matches two hosts in one rule.
+    """
+    if "!" in match:
+        return False, "contains a negation, which inverts the host match"
+    for matcher in FORBIDDEN_MATCHERS:
+        if matcher in match:
+            return False, f"uses {matcher}"
+    # Top-level split. Traefik matcher arguments are single quoted tokens, so a `||` cannot
+    # appear inside one.
+    arms = [a.strip() for a in match.split("||")]
+    for arm in arms:
+        hosts = {m.group(2) for m in HOST_CALL.finditer(arm)}
+        if not hosts:
+            return False, f"arm {arm[:44]!r} has no Host() and matches any hostname"
+        foreign = hosts - ALLOWED_ROUTE_HOSTS
+        if foreign:
+            return False, f"arm names foreign host(s) {sorted(foreign)}"
+    return True, f"{len(arms)} arm(s), each pinned to an allowed host"
 
 # NetworkPolicies the overlays are allowed to declare. Policies are ADDITIVE — a second policy
 # cannot tighten the first, only widen the union — so `egress: []` in the default-deny is a
@@ -162,15 +209,26 @@ def load(path: str) -> list[dict]:
 
 # ---------------------------------------------------------------- 1. the overlays
 print("== overlays contain only namespaced application resources ==")
-rendered = sys.argv[1:]
-if not rendered:
-    sys.exit("usage: check-tenancy.py <rendered-overlay.yaml> [more...]  (see module docstring)")
-check("rendered overlays were supplied", len(rendered) >= 2, f"{len(rendered)} files")
+# Each argument is `namespace=path`. The namespace is required rather than inferred: the two
+# Roles are deliberately NOT identical — staging renders no IngressRoute, Middleware,
+# Certificate or Issuer and is granted none of them — so the requirement has to be derived per
+# environment. Guessing which render belongs to which namespace from its contents would be
+# exactly the kind of inference that stops being true the day an overlay changes.
+if len(sys.argv) < 2:
+    sys.exit("usage: check-tenancy.py <namespace>=<rendered-overlay.yaml> ...  "
+             "(see module docstring)")
+overlay_for: dict[str, str] = {}
+for arg in sys.argv[1:]:
+    if "=" not in arg:
+        sys.exit(f"argument {arg!r} is not <namespace>=<path>")
+    ns, _, path = arg.partition("=")
+    overlay_for[ns] = path
+rendered = list(overlay_for.values())
+check("an overlay render was supplied for each Renvor namespace",
+      set(overlay_for) == RENVOR_NAMESPACES, str(sorted(overlay_for)))
 missing_render = [p for p in rendered if not pathlib.Path(p).is_file()]
 check("every supplied overlay render exists", not missing_render, str(missing_render))
 
-required_rules: set[tuple[str, str]] = set()
-overlay_objects = 0
 def parse(path: str) -> list[dict]:
     """Parse a render, turning a malformed file into a reported failure rather than a crash."""
     try:
@@ -181,7 +239,10 @@ def parse(path: str) -> list[dict]:
         return []
 
 
-for path in rendered:
+required_by_ns: dict[str, set[tuple[str, str]]] = {}
+overlay_objects = 0
+for ns, path in sorted(overlay_for.items()):
+    required_rules: set[tuple[str, str]] = set()
     docs = parse(path)
     check(f"{path} is non-empty", len(docs) > 0, f"{len(docs)} objects")
     overlay_objects += len(docs)
@@ -193,14 +254,19 @@ for path in rendered:
     for d in docs:
         if d.get("kind") in KIND_TO_RULE:
             required_rules.add(KIND_TO_RULE[d["kind"]])
+    required_by_ns[ns] = required_rules
+    print(f"     {ns}: derived requirement = {len(required_rules)} (apiGroup, resource) pairs")
 
 check("the overlays actually declare resources", overlay_objects > 0, f"{overlay_objects} objects")
-print(f"     derived requirement: {len(required_rules)} (apiGroup, resource) pairs")
+check("the two environments do NOT require the same set",
+      required_by_ns.get("renvor-site-staging") != required_by_ns.get("renvor-site"),
+      "staging renders fewer kinds, so it must be granted fewer")
 
 # --------------------------------------------- 1b. the shared ingress is the real escape hatch
 print("\n== no route claims a hostname that is not Renvor's ==")
 routes_seen = 0
 policies_seen = 0
+certs_seen = 0
 for path in rendered:
     for d in parse(path):
         if d.get("kind") == "IngressRoute":
@@ -208,14 +274,24 @@ for path in rendered:
                 routes_seen += 1
                 match = route.get("match", "")
                 where = f"{d['metadata']['name']} p={route.get('priority')}"
-                hosts = {m.group(2) for m in HOST_CALL.finditer(match)}
-                check(f"{where}: the rule selects on an explicit Host()", bool(hosts),
-                      match[:70] if not hosts else f"{sorted(hosts)}")
-                foreign = hosts - ALLOWED_ROUTE_HOSTS
-                check(f"{where}: every Host() is a Renvor hostname", not foreign,
-                      f"foreign {sorted(foreign)}" if foreign else "clean")
-                bad_matcher = [m for m in FORBIDDEN_MATCHERS if m in match]
-                check(f"{where}: uses no wildcard host matcher", not bad_matcher, str(bad_matcher))
+                ok, why = route_is_host_restricted(match)
+                check(f"{where}: every match arm is pinned to a Renvor hostname", ok, why)
+
+        if d.get("kind") == "Certificate":
+            certs_seen += 1
+            name = d["metadata"]["name"]
+            names = set(d["spec"].get("dnsNames", []))
+            # A Certificate is an ACME request. Unconstrained `dnsNames` plus the route hijack
+            # above would obtain a GENUINE, browser-trusted certificate for a co-tenant's
+            # hostname — worse than the hijack alone, because nothing would look wrong to a
+            # visitor. The same allow-list that bounds routing has to bound issuance.
+            foreign = names - ALLOWED_ROUTE_HOSTS
+            check(f"Certificate/{name} requests only Renvor hostnames", not foreign,
+                  f"foreign {sorted(foreign)}" if foreign else f"{sorted(names)}")
+            check(f"Certificate/{name} requests at least one hostname", bool(names), str(sorted(names)))
+            check(f"Certificate/{name} uses a namespaced Issuer, not a ClusterIssuer",
+                  (d["spec"].get("issuerRef") or {}).get("kind") == "Issuer",
+                  str((d["spec"].get("issuerRef") or {}).get("kind")))
 
         if d.get("kind") == "NetworkPolicy":
             policies_seen += 1
@@ -228,9 +304,24 @@ for path in rendered:
             # list holds one empty element.
             egress = spec.get("egress") or []
             check(f"NetworkPolicy/{name} opens no egress", not egress, str(egress) or "none")
+            if name == "renvor-site-default-deny":
+                # A DEFAULT-DENY THAT SELECTS NO PODS DENIES NOTHING.
+                #
+                # Narrowing `podSelector` to a label no pod carries keeps the name, the
+                # policyTypes and the empty rule lists — every surface-level property a reviewer
+                # or a name-based check would look at — while silently exempting the whole
+                # namespace and re-opening egress. The selector is the part that has to be
+                # empty, and emptiness is the thing to assert.
+                sel = spec.get("podSelector")
+                check(f"NetworkPolicy/{name} selects every pod in the namespace", sel == {},
+                      f"podSelector={sel!r}")
+                check(f"NetworkPolicy/{name} covers both directions",
+                      set(spec.get("policyTypes", [])) == {"Ingress", "Egress"},
+                      str(spec.get("policyTypes")))
 
 check("at least one IngressRoute rule was inspected", routes_seen > 0, f"{routes_seen} rules")
 check("at least one NetworkPolicy was inspected", policies_seen > 0, f"{policies_seen} policies")
+check("at least one Certificate was inspected", certs_seen > 0, f"{certs_seen} certificates")
 
 # ---------------------------------------------------------------- 2. the Roles
 print("\n== the reconciler's authority matches that requirement exactly ==")
@@ -245,15 +336,19 @@ check("the Roles are in the Renvor namespaces only",
 # The full expectation: what the overlays apply (managed, full verbs) plus what the health
 # checks read (read-only). Anything outside this is surplus; anything inside it and absent is a
 # gap that will fail on the live cluster.
-expected: dict[tuple[str, str], set[str]] = {r: MANAGED_VERBS for r in required_rules}
-for pair, verbs in HEALTH_CHECK_READS.items():
-    if pair in expected:
+def expected_for(ns: str) -> dict[tuple[str, str], set[str]]:
+    """What this namespace's Role must grant: what its overlay applies, plus the health reads."""
+    out: dict[tuple[str, str], set[str]] = {r: MANAGED_VERBS for r in required_by_ns.get(ns, set())}
+    for pair, verbs in HEALTH_CHECK_READS.items():
         # An applied resource that is also observed keeps its full verb set.
-        continue
-    expected[pair] = verbs
+        out.setdefault(pair, verbs)
+    return out
+
 
 for role in roles:
     ns = role["metadata"]["namespace"]
+    expected = expected_for(ns)
+    required_rules = required_by_ns.get(ns, set())
     granted: set[tuple[str, str]] = set()
     for rule in role.get("rules", []):
         for group in rule.get("apiGroups", []):

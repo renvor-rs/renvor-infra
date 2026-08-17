@@ -147,8 +147,8 @@ jobs:
           # legitimately the kinds this check forbids *inside an overlay*. Copying them to
           # shorter names would also duplicate every resource for the later duplicate detector.
           python3 scripts/check-tenancy.py \
-            rendered/apps-renvor-site-overlays-staging.yaml \
-            rendered/apps-renvor-site-overlays-production.yaml
+            renvor-site-staging=rendered/apps-renvor-site-overlays-staging.yaml \
+            renvor-site=rendered/apps-renvor-site-overlays-production.yaml
 
       - name: Prove every tenancy check is live
         run: |
@@ -156,8 +156,8 @@ jobs:
           # A gate nobody has watched fail is not a gate. This breaks each property in turn, in
           # a throwaway copy of the tree, and fails the build if any tampered tree still passes.
           python3 scripts/check-tenancy-controls.py \
-            rendered/apps-renvor-site-overlays-staging.yaml \
-            rendered/apps-renvor-site-overlays-production.yaml
+            renvor-site-staging=rendered/apps-renvor-site-overlays-staging.yaml \
+            renvor-site=rendered/apps-renvor-site-overlays-production.yaml
 
       # ── The security properties this repository promises ────────────────────────────
       - name: Assert the workload security invariants
@@ -192,7 +192,11 @@ jobs:
                   if pod_sc.get('runAsNonRoot') is not True:
                       fail("pod securityContext.runAsNonRoot must be true")
 
-                  for c in spec['containers']:
+                  # initContainers and ephemeralContainers run in the same Pod with the same
+                  # access. Checking only `containers` let a privileged initContainer through
+                  # every invariant below while the Deployment still passed.
+                  for c in (spec.get('containers', []) + spec.get('initContainers', [])
+                            + spec.get('ephemeralContainers', [])):
                       sc = c.get('securityContext', {})
                       img = c['image']
                       if '@sha256:' not in img:
@@ -209,6 +213,19 @@ jobs:
                           fail("must drop ALL capabilities")
                       if sc.get('seccompProfile', {}).get('type') != 'RuntimeDefault':
                           fail("seccompProfile must be RuntimeDefault")
+                      # A Secret reaching the container by ANY route. `envFrom.secretRef` and
+                      # secret volumes were already refused; `env[].valueFrom.secretKeyRef` is the
+                      # same capability one field deeper, and it reads `renvor-dev-tls`'s
+                      # private key into an environment variable.
+                      for e in c.get('env', []) or []:
+                          vf = e.get('valueFrom') or {}
+                          if 'secretKeyRef' in vf:
+                              fail(f"env {e.get('name')!r} sources a Secret via valueFrom.secretKeyRef")
+                          if 'configMapKeyRef' in vf:
+                              fail(f"env {e.get('name')!r} sources a ConfigMap; configuration is baked into the image")
+                      for ef in c.get('envFrom', []) or []:
+                          if 'secretRef' in ef or 'configMapRef' in ef:
+                              fail("envFrom must not import a Secret or ConfigMap")
                       res = c.get('resources', {})
                       for side in ('requests', 'limits'):
                           for key in ('cpu', 'memory', 'ephemeral-storage'):

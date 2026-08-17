@@ -14,10 +14,22 @@ spec:
   interval: 5m
   url: https://github.com/renvor-rs/renvor-infra
   ref:
-    # A branch, not a tag or a commit. `main` is protected by an active ruleset requiring a
-    # pull request, signed commits, linear history, and conversation resolution, with zero
-    # bypass actors — so "what is on main" is already a reviewed artifact, and following it is
-    # following the review.
+    # A branch, not a tag or a commit.
+    #
+    # WHAT THE `main` RULESET ACTUALLY ENFORCES, as queried from the GitHub API rather than
+    # assumed: a pull request is required, commits must be signed, history must stay linear,
+    # and the branch cannot be deleted or force-pushed.
+    #
+    # WHAT IT DOES NOT ENFORCE, and this matters: `required_status_checks` is **empty** and
+    # `required_approving_review_count` is **0**. So `infra-ci` is advisory — every check in
+    # this repository can be red and the pull request will still merge, and it can be merged by
+    # its own author with no second pair of eyes.
+    #
+    # An earlier version of this comment claimed "what is on main is already a reviewed
+    # artifact". That is not true today, and stating it here would make an open gate look
+    # closed. Until the ruleset requires the `validate` check and at least one approval, the
+    # real protection against a bad commit reaching this cluster is the namespaced
+    # `renvor-reconciler` identity — not the review process.
     branch: main
   # Fetch only what is needed to read the tree. No submodules: this repository has none, and
   # enabling them would let a future submodule pull in code from a source nobody reviewed here.

@@ -100,8 +100,9 @@ metadata:
 # THE COMPLETE AUTHORITY OF REPOSITORY-DRIVEN RECONCILIATION, staging.
 #
 # Every resource type below appears in `apps/renvor-site/overlays/staging`, and every resource
-# type in that overlay appears below. The list was derived by parsing the rendered output, not
-# written from memory, and CI re-derives it on every run so the two cannot drift.
+# type in that overlay appears below — for THIS overlay specifically, not for the union of both.
+# CI derives the requirement per namespace from the rendered output and compares it in both
+# directions, so a grant this environment does not need fails the build.
 #
 # READ-ONLY, AND REQUIRED BY `wait: true` RATHER THAN BY ANY MANIFEST:
 #   - `pods`, `replicasets` — **get/list/watch only**.
@@ -114,9 +115,10 @@ metadata:
 #     its client and its kstatus StatusPoller from the impersonated config — so health checks
 #     run as this ServiceAccount, not as the controller. kstatus's Deployment reader does not
 #     read the Deployment alone: it resolves the generated ReplicaSets, and through them the
-#     Pods, with a namespaced LIST. That LIST returning `forbidden` is propagated as an error
-#     rather than degrading to "unknown", so the Kustomization never reports Ready, and
-#     production — which `dependsOn` staging — never reconciles at all.
+#     Pods, with a namespaced LIST. A `forbidden` on that LIST is turned into an **Unknown**
+#     status carrying the error, so the resource never computes as Current, the Kustomization
+#     never reports Ready, it times out, and production — which `dependsOn` staging — never
+#     reconciles at all.
 #
 #     Verified in the pinned image: `statusreaders.deploymentResourceReader`,
 #     `NewReplicaSetStatusReader`, `podControllerStatusReader` and `ListNamespaceScoped` are
@@ -160,12 +162,17 @@ rules:
   - apiGroups: ['networking.k8s.io']
     resources: ['networkpolicies']
     verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete']
-  - apiGroups: ['cert-manager.io']
-    resources: ['certificates', 'issuers']
-    verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete']
-  - apiGroups: ['traefik.io']
-    resources: ['ingressroutes', 'middlewares']
-    verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete']
+  # NO cert-manager AND NO traefik.io HERE, DELIBERATELY.
+  #
+  # The staging overlay renders neither, and staging has no hostname by design. Granting them
+  # anyway would let a staging manifest create an IngressRoute — and because Traefik routes
+  # cluster-globally, a staging route claiming `Host(`renvor.dev`)` would contend with
+  # production for real traffic. The hostname allow-list in CI would not catch it: `renvor.dev`
+  # is on the allow-list, just not for this environment.
+  #
+  # These two Roles are therefore NOT copies of each other. Production has four resource types
+  # staging does not, because production renders four kinds staging does not.
+  #
   # Read-only, for `wait: true` health assessment only. No create, no delete — the reconciler
   # cannot make a Pod, only observe the ones a Deployment produced.
   - apiGroups: ['apps']
