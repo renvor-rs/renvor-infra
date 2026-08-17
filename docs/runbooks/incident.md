@@ -55,6 +55,36 @@ kubectl -n flux-system logs deploy/kustomize-controller --tail=50
 A `NotReady` Kustomization with a health-check failure means Flux applied the manifests and the
 workload did not become healthy — that is the controller doing its job, not the fault.
 
+### A reconciliation that fails with `forbidden`
+
+Reconciliation runs as `flux-system/renvor-reconciler`, not as the controller's own identity.
+That account is deliberately limited to ten resource types in the two Renvor namespaces, so a
+manifest introducing a **new kind** fails closed:
+
+```
+Kustomization/renvor-site-production ... failed: ... is forbidden:
+User "system:serviceaccount:flux-system:renvor-reconciler" cannot create
+resource "cronjobs" in API group "batch" in the namespace "renvor-site"
+```
+
+**That is the boundary working, not a bug.** Confirm the exact permission with:
+
+```sh
+kubectl auth can-i create cronjobs -n renvor-site \
+  --as=system:serviceaccount:flux-system:renvor-reconciler
+```
+
+The fix is to add the resource to **both** Roles in
+`clusters/hostinger/flux-system/renvor-tenancy.yaml`, have it reviewed as the RBAC change it
+is, and apply it by hand — the reconciler cannot widen its own permissions, which is the
+point. `scripts/check-tenancy.py` fails until the grants and the manifests agree in *both*
+directions, so a permission cannot be added without a manifest that needs it, and a manifest
+cannot be added without the permission.
+
+**Never** work around this by deleting `serviceAccountName` from the Kustomization or pointing
+it at another account. Either silently restores cluster-admin reconciliation of a public
+repository onto a cluster shared with unrelated production workloads.
+
 ## 5. Is the right image running?
 
 ```sh
