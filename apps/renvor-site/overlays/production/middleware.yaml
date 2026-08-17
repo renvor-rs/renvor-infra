@@ -37,7 +37,7 @@ spec:
       # publish the attack surface either.
       Server: ''
       X-Powered-By: ''
-    # HSTS IS DEPARTMENT ABSENT UNTIL THE CERTIFICATE IS TRUSTED AND RENEWAL IS PROVEN.
+    # HSTS IS DELIBERATELY ABSENT UNTIL THE CERTIFICATE IS TRUSTED AND RENEWAL IS PROVEN.
     #
     # `Strict-Transport-Security` is close to irreversible: once a browser has cached it, that
     # browser refuses plain HTTP to this host for the max-age, and there is no way to reach the
