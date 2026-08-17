@@ -296,17 +296,85 @@ jobs:
       - name: Assert no Secret object and no inline credential
         run: |
           set -euo pipefail
-          # A Secret manifest here would mean a credential in Git, ciphertext or not.
-          if grep -rn '^kind: Secret' rendered/ apps/ clusters/ 2>/dev/null; then
-            echo "::error::a Secret manifest is present; cluster secrets are managed in the cluster"
-            exit 1
-          fi
-          # Flux must reach the source repository anonymously.
-          if grep -rn 'secretRef' clusters/ 2>/dev/null; then
-            echo "::error::a secretRef appears in the cluster configuration; the source is public and needs none"
-            exit 1
-          fi
-          echo "no Secret manifest, no secretRef"
+          # THIS CHECK PARSES OBJECTS; IT DOES NOT SEARCH FOR TEXT.
+          #
+          # A text search for `secretRef` cannot express this invariant, and the first version
+          # of this step proved it by failing on three things that are all correct:
+          #
+          #   - the vendored Flux CRDs, whose OpenAPI schemas *define* `secretRef` as an
+          #     available field and whose CEL rules name it. That is Flux's API surface; it
+          #     exists whether or not anything sets it, and it cannot be removed;
+          #   - a comment in `gitrepository.yaml` stating that there is no `secretRef`;
+          #   - a line in a README stating the same.
+          #
+          # A gate that fails on prose asserting the invariant holds is not enforcing the
+          # invariant. What matters is structural: no object may BE a Secret, and no object we
+          # author may SET `spec.secretRef`. That is what is checked below.
+          python3 - <<'PY'
+          import pathlib
+          import sys
+
+          import yaml
+
+          roots = [pathlib.Path(p) for p in ("rendered", "apps", "clusters") if pathlib.Path(p).is_dir()]
+          files = sorted({f for r in roots for pat in ("*.yaml", "*.yml") for f in r.rglob(pat)})
+
+          violations = []
+          objects = 0
+          crds = 0
+
+
+          def secret_refs(node, path):
+              """Yield every dotted path at which a mapping key `secretRef` appears."""
+              if isinstance(node, dict):
+                  for k, v in node.items():
+                      here = f"{path}.{k}"
+                      if k == "secretRef":
+                          yield here
+                      yield from secret_refs(v, here)
+              elif isinstance(node, list):
+                  for i, v in enumerate(node):
+                      yield from secret_refs(v, f"{path}[{i}]")
+
+
+          for f in files:
+              try:
+                  docs = list(yaml.safe_load_all(f.read_text()))
+              except yaml.YAMLError as exc:
+                  violations.append(f"{f}: unparseable ({exc.__class__.__name__})")
+                  continue
+              for d in docs:
+                  if not isinstance(d, dict) or not d.get("kind"):
+                      continue
+                  objects += 1
+                  kind = d["kind"]
+                  name = (d.get("metadata") or {}).get("name", "<unnamed>")
+
+                  if kind == "Secret":
+                      violations.append(f"{f}: a Secret object is present ({name})")
+
+                  # A CustomResourceDefinition describes fields; it does not use them. Its
+                  # schema legitimately names `secretRef`. Every other object is an instance,
+                  # and an instance that sets `secretRef` is naming a credential.
+                  if kind == "CustomResourceDefinition":
+                      crds += 1
+                      continue
+
+                  for hit in secret_refs(d.get("spec"), "spec"):
+                      violations.append(f"{f}: {kind}/{name} sets {hit}")
+
+          if violations:
+              for v in violations:
+                  print(f"::error::{v}")
+              sys.exit(f"{len(violations)} credential reference(s) found")
+
+          if objects == 0:
+              sys.exit("no objects were parsed; this check would pass vacuously")
+
+          print(f"{objects} objects across {len(files)} files: no Secret object, and no "
+                f"instance sets spec.secretRef ({crds} CRDs skipped, which define the field "
+                f"rather than use it)")
+          PY
 
       - name: Upload the rendered manifests
         if: ${{ !cancelled() }}
