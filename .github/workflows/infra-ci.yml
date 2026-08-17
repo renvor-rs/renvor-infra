@@ -103,11 +103,29 @@ jobs:
           # would turn every CRD typo into a pass.
           for f in rendered/*.yaml; do
             echo "── $f"
+            skip=''
+            if [ "$f" = 'rendered/clusters-hostinger-flux-system.yaml' ]; then
+              # THE ONLY EXEMPTION, AND IT IS NARROW: the `CustomResourceDefinition` *kind*
+              # itself, in this one file.
+              #
+              # kubeconform has no schema for CustomResourceDefinition in the default set, so
+              # upstream Flux's seven CRD definitions report "could not find schema" — an
+              # availability problem, not a correctness one. Everything else in this file is
+              # still validated: on the run that exposed this, 22 of 29 objects passed and the
+              # only 7 errors were these.
+              #
+              # What matters here is the tenancy boundary — the Namespaces, ServiceAccount,
+              # Roles and RoleBindings in `renvor-tenancy.yaml` — and those keep full `-strict`
+              # coverage. The CRDs are vendored upstream bytes whose provenance is established
+              # by a verified signature and a published checksum, not by this step.
+              skip='-skip=CustomResourceDefinition'
+            fi
+            # shellcheck disable=SC2086  # $skip is deliberately word-split: empty means no flag.
             /tmp/kubeconform -strict -summary \
               -kubernetes-version "${KUBERNETES_VERSION}" \
               -schema-location default \
               -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
-              "$f"
+              $skip "$f"
           done
 
       # ── The tenancy boundary ────────────────────────────────────────────────────────
