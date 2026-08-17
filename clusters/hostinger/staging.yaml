@@ -16,9 +16,14 @@ spec:
   # Pruning is ON, and its scope is the thing to understand.
   #
   # Flux labels every object it applies from THIS Kustomization with an identifier unique to
-  # it, and prunes only objects carrying that label which are no longer in the source. It
-  # cannot delete an object it did not create — the 28 running pods in `gitlab`, `attaa`,
-  # `codexhub`, and `portfolio` carry no such label and are invisible to it.
+  # it, and prunes only objects carrying that label which are no longer in the source. So
+  # pruning cannot delete an object this Kustomization did not create.
+  #
+  # That is a statement about *pruning*, not about visibility. The workloads in `gitlab`,
+  # `attaa`, `codexhub` and `portfolio` are not invisible to the Flux controller — it holds
+  # cluster-admin. What keeps them safe is that reconciliation runs as `renvor-reconciler`,
+  # which has no authority in their namespaces at all. See the tenancy note in
+  # `flux-system/renvor-tenancy.yaml`.
   #
   # With pruning off, removing a manifest from Git would leave the object running forever, and
   # the cluster would diverge from the repository silently. That is the failure this repository
@@ -42,6 +47,19 @@ spec:
   # Restrict every object this Kustomization applies to one namespace. A manifest that tried to
   # create something elsewhere — by accident or otherwise — is rejected rather than applied.
   targetNamespace: renvor-site-staging
+
+  # THE IDENTITY THIS RECONCILIATION RUNS AS.
+  #
+  # Without this field, kustomize-controller applies as its own ServiceAccount, which upstream
+  # Flux binds to cluster-admin — on a cluster that also runs GitLab and three unrelated
+  # applications, from a public repository. `renvor-reconciler` can write ten resource types in
+  # two namespaces and nothing else; it cannot read a Secret anywhere.
+  #
+  # This is stated explicitly even though `--default-service-account=renvor-reconciler` on the
+  # controller makes it the fallback too. Belt and braces on purpose: the default protects
+  # against forgetting the field, and the field protects against the default being lost in a
+  # controller upgrade. Neither alone is a boundary you can read off a single file.
+  serviceAccountName: renvor-reconciler
 
   # Refuse to apply anything the manifests do not fully specify. Without this, a partially
   # applied set can be reported as reconciled.

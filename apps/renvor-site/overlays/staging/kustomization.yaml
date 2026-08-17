@@ -14,8 +14,17 @@ kind: Kustomization
 
 namespace: renvor-site-staging
 
+# NO Namespace RESOURCE HERE, DELIBERATELY.
+#
+# `renvor-site-staging` is created by the hand-applied bootstrap in
+# `clusters/hostinger/flux-system/renvor-tenancy.yaml`, together with the Role and RoleBinding
+# that constrain this overlay. Reconciliation runs as `flux-system/renvor-reconciler`, which
+# holds no authority over namespaces at all — it cannot create one, relabel one, or prune one.
+#
+# That is the point: the overlay reconciles strictly *inside* a boundary it has no power to
+# move. If this resource were restored here, reconciliation would fail closed with a
+# permissions error rather than quietly regaining control of its own walls.
 resources:
-  - namespace.yaml
   - ../../base
 
 # The digest is the deployment. `newTag` is deliberately absent and must stay absent: a tag can

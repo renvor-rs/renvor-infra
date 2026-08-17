@@ -1,9 +1,20 @@
-# The only path Flux reconciles on this cluster.
+# The Flux control plane. APPLIED BY HAND — Flux reconciles none of this.
 #
-# It contains the source definition and the two Kustomizations, and nothing else. In
-# particular it does NOT include `flux-system/` — the controllers are bootstrapped by hand and
-# are not managed by themselves, so that a bad commit cannot take down the thing that would
-# have to apply the fix.
+#   kubectl apply --server-side -k clusters/hostinger/
+#
+# It holds the source definition and the two Kustomizations, and nothing else. In particular it
+# does NOT include `flux-system/` — the controllers and the tenancy boundary are a separate
+# hand-applied bootstrap, so a bad commit cannot take down the thing that would have to apply
+# the fix.
+#
+# NOTHING HERE IS RECONCILED, and that is the point. `/clusters` is excluded from the artifact
+# the GitRepository fetches (see `gitrepository.yaml`), so these objects are not merely
+# unreconciled — they are absent from the bytes Flux downloads. A commit to the public
+# repository therefore cannot edit the objects that constrain commits to the public repository:
+# it cannot raise its own `serviceAccountName`, widen its own `targetNamespace`, or repoint the
+# source.
+#
+# The cost is that changes here take effect only when a human applies them.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 

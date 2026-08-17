@@ -3,10 +3,32 @@
 **This directory is applied once, by hand, and is not reconciled by Flux itself.**
 
 Flux cannot install itself: something has to create the controllers that then watch Git. That
-bootstrap is the one manual `kubectl apply` in this repository, and everything after it is
-reconciled from `main`. Committing the manifest *before* applying it is what makes even the
-bootstrap reviewable — the file below is the exact bytes that were applied, not a description
-of them.
+bootstrap is the one manual `kubectl apply` in this repository, and the application overlays
+are reconciled from `main` afterwards. Committing everything *before* applying it is what makes
+even the bootstrap reviewable.
+
+**What is applied here is `kustomization.yaml`, not `flux-system.yaml` alone.** Three things go
+in together:
+
+| File | What it is |
+|---|---|
+| `flux-system.yaml` | upstream Flux v2.9.4, **byte-identical**, signature verified below |
+| `renvor-tenancy.yaml` | the tenancy boundary — 2 namespaces, the reconciler ServiceAccount, 2 Roles, 2 RoleBindings |
+| `kustomization.yaml` | combines those two and patches three hardening flags into `kustomize-controller` |
+
+`flux-system.yaml` is **not** edited in place, and the reason is the provenance table below:
+its published checksum and cosign signature are only evidence while the file is the bytes those
+signatures cover. Editing it to add three flags would destroy the one thing proving where it
+came from. So the local changes live in `kustomization.yaml` as patches, where they read as a
+short diff rather than as three lines buried in 3,586 lines of vendored YAML.
+
+The consequence, stated plainly: `flux-system.yaml` is the exact upstream bytes, but it is
+**not** the exact running configuration. Run `kubectl kustomize clusters/hostinger/flux-system/`
+to see what is actually applied.
+
+**The control plane in the parent directory is also hand-applied**, and deliberately excluded
+from the artifact Flux fetches — see the note in `../gitrepository.yaml`. A commit to the public
+repository cannot edit the objects that constrain commits to the public repository.
 
 ## Provenance
 
@@ -55,24 +77,35 @@ ResourceQuota — all in `flux-system`.
 - **One source:** the **public** `https://github.com/renvor-rs/renvor-infra` over HTTPS, with
   **no credential of any kind** — no deploy key, no PAT, no `secretRef`. The repository is
   public, so anonymous read is sufficient, and there is nothing to rotate or leak.
-- **One path:** `clusters/hostinger`. Nothing else in the repository is reconciled.
-- **Renvor namespaces only.** The Kustomizations name `renvor-site-staging` and `renvor-site`.
-  Flux is never pointed at `gitlab`, `attaa`, `codexhub`, `portfolio`, or `kube-system`.
+- **Two paths, both under `apps/`:** the staging and production overlays. `/clusters` is not
+  even present in the fetched artifact, so the control plane cannot reconcile itself.
+- **Renvor namespaces only.** The Kustomizations name `renvor-site-staging` and `renvor-site`,
+  and — more importantly than naming — reconcile as `renvor-reconciler`, which has no authority
+  outside those two namespaces. Flux is never pointed at `gitlab`, `attaa`, `codexhub`,
+  `portfolio`, or `kube-system`, and could not write to them if it were.
 
 ## Applying it
 
 ```sh
-kubectl apply --server-side -f clusters/hostinger/flux-system/flux-system.yaml
+# The whole bootstrap: upstream Flux + the tenancy boundary + the hardening patches.
+kubectl apply --server-side -k clusters/hostinger/flux-system/
 kubectl -n flux-system rollout status deploy/source-controller deploy/kustomize-controller
+
+# Then the control plane, by hand, from the same reviewed commit.
+kubectl apply --server-side -k clusters/hostinger/
 ```
 
 `--server-side` because the CRDs in this file exceed the annotation size limit that
 client-side apply uses to store its last-applied state.
 
+`-k`, not `-f`: `-f` on the directory would apply the raw files without the patches, silently
+producing a `kustomize-controller` with **no `--default-service-account`** — which is precisely
+the fail-open state this design exists to prevent. Use `-k`.
+
 ## Removing it
 
 ```sh
-kubectl delete -f clusters/hostinger/flux-system/flux-system.yaml
+kubectl delete -k clusters/hostinger/flux-system/
 ```
 
 This removes the controllers and the Flux CRDs. It does **not** remove the workloads Flux

@@ -27,15 +27,13 @@ while nobody is looking. The change has to happen in Git.
 
 ## Removing the deployment entirely
 
-To return the cluster to its pre-deployment state — `renvor.dev` answering HTTP 404 from
-Traefik's default backend:
+To stop serving `renvor.dev` — returning it to HTTP 404 from Traefik's default backend:
 
 ```sh
 # 1. Delete the Kustomization. Pruning removes the objects it created, and only those.
 kubectl -n flux-system delete kustomization renvor-site-production
 
-# 2. Confirm the namespace drained.
-kubectl get ns renvor-site
+# 2. Confirm the namespace emptied of application objects.
 kubectl -n renvor-site get all,ingressroute,middleware,certificate,issuer
 
 # 3. Confirm the external state returned.
@@ -44,7 +42,30 @@ curl -s -o /dev/null -w '%{http_code}\n' http://renvor.dev/     # expect 404
 
 Deleting the Kustomization is what makes pruning safe: Flux removes only objects carrying its
 ownership label for that Kustomization. The workloads in `gitlab`, `attaa`, `codexhub`, and
-`portfolio` carry no such label and are untouched.
+`portfolio` carry no such label — and, more decisively, `renvor-reconciler` holds no authority
+in their namespaces at all.
+
+### The namespace does NOT drain, and should not
+
+The two namespaces, the `renvor-reconciler` ServiceAccount, and its Roles and RoleBindings come
+from the **hand-applied bootstrap**, not from any Kustomization. Nothing prunes them, so after
+step 1 `kubectl get ns renvor-site` still returns the namespace — emptied of application
+objects, with its Pod Security labels and RBAC intact.
+
+That is correct rather than leftover. The namespace is the boundary reconciliation runs
+*inside*; if rollback removed it, the next deployment would have to recreate it, which needs the
+cluster-wide namespace authority this design deliberately removes.
+
+**To remove the tenancy boundary as well** — only when retiring Renvor from this cluster
+entirely, and only once both Kustomizations are gone:
+
+```sh
+kubectl delete -f clusters/hostinger/flux-system/renvor-tenancy.yaml
+```
+
+Deleting a namespace deletes everything still inside it, including the TLS Secret cert-manager
+issued. Do not reach for this to fix a bad deploy: a fresh certificate then has to be issued,
+and Let's Encrypt's rate limits are counted per registered domain per week.
 
 **Staging is kept unless it is itself the problem.** If production failed and staging is
 healthy, staging is the best available evidence of what went wrong.
