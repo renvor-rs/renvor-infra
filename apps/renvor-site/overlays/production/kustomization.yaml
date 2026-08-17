@@ -4,8 +4,10 @@ kind: Kustomization
 
 namespace: renvor-site
 
+# NO Namespace RESOURCE HERE, DELIBERATELY — see the staging overlay for the full reasoning.
+# `renvor-site` is created by the hand-applied bootstrap alongside the Role and RoleBinding
+# that constrain this overlay, and the reconciler holds no namespace authority whatsoever.
 resources:
-  - namespace.yaml
   - ../../base
   - issuer.yaml
   - certificate.yaml

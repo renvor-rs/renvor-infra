@@ -43,6 +43,19 @@ spec:
   # create something elsewhere — by accident or otherwise — is rejected rather than applied.
   targetNamespace: renvor-site-staging
 
+  # THE IDENTITY THIS RECONCILIATION RUNS AS.
+  #
+  # Without this field, kustomize-controller applies as its own ServiceAccount, which upstream
+  # Flux binds to cluster-admin — on a cluster that also runs GitLab and three unrelated
+  # applications, from a public repository. `renvor-reconciler` can write ten resource types in
+  # two namespaces and nothing else; it cannot read a Secret anywhere.
+  #
+  # This is stated explicitly even though `--default-service-account=renvor-reconciler` on the
+  # controller makes it the fallback too. Belt and braces on purpose: the default protects
+  # against forgetting the field, and the field protects against the default being lost in a
+  # controller upgrade. Neither alone is a boundary you can read off a single file.
+  serviceAccountName: renvor-reconciler
+
   # Refuse to apply anything the manifests do not fully specify. Without this, a partially
   # applied set can be reported as reconciled.
   force: false

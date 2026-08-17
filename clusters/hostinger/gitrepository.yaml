@@ -26,5 +26,19 @@ spec:
     # a new top-level directory arrives ignored rather than arriving live.
     /*
     !/apps
-    !/clusters
   timeout: 60s
+# `/clusters` IS DELIBERATELY NOT RE-INCLUDED, AND THAT IS A SECURITY BOUNDARY.
+#
+# This directory holds the Flux control plane: this GitRepository, both Kustomizations, and the
+# tenancy bootstrap that constrains them. Those objects are applied by hand from a reviewed
+# commit and are never reconciled.
+#
+# If `/clusters` were in the fetched artifact, a commit to the public repository could edit the
+# very objects that limit what a commit to the public repository may do — raise its own
+# `serviceAccountName`, widen its own `targetNamespace`, or point the source somewhere else.
+# Excluding it means the control plane is not merely *unreconciled* but **absent from the bytes
+# Flux downloads**, so there is nothing to reconcile even by mistake.
+#
+# The cost is real and worth stating: changes under `/clusters` do not take effect until
+# someone applies them by hand. That is the intended trade — the control plane should not be
+# self-modifying.

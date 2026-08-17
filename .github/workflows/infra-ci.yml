@@ -105,6 +105,37 @@ jobs:
               "$f"
           done
 
+      # ── The tenancy boundary ────────────────────────────────────────────────────────
+      - name: Assert the namespace-scoped reconciliation boundary
+        run: |
+          set -euo pipefail
+          # Upstream Flux binds kustomize-controller to cluster-admin. Renvor reconciles a
+          # PUBLIC repository onto a cluster shared with unrelated production workloads, so
+          # repository-driven applies must run as the restricted `renvor-reconciler` identity
+          # instead. That boundary is several independent facts, and the worst of them fails
+          # OPEN: drop `serviceAccountName` and reconciliation keeps working, silently, as
+          # cluster-admin.
+          #
+          # The Roles are checked against the resource types the overlays actually render, in
+          # both directions — a missing grant breaks the deploy, a surplus grant is authority
+          # nobody asked for.
+          # The two overlay renders are named explicitly rather than globbed: `rendered/` also
+          # holds the rendered control plane, whose GitRepository and Kustomization objects are
+          # legitimately the kinds this check forbids *inside an overlay*. Copying them to
+          # shorter names would also duplicate every resource for the later duplicate detector.
+          python3 scripts/check-tenancy.py \
+            rendered/apps-renvor-site-overlays-staging.yaml \
+            rendered/apps-renvor-site-overlays-production.yaml
+
+      - name: Prove every tenancy check is live
+        run: |
+          set -euo pipefail
+          # A gate nobody has watched fail is not a gate. This breaks each property in turn, in
+          # a throwaway copy of the tree, and fails the build if any tampered tree still passes.
+          python3 scripts/check-tenancy-controls.py \
+            rendered/apps-renvor-site-overlays-staging.yaml \
+            rendered/apps-renvor-site-overlays-production.yaml
+
       # ── The security properties this repository promises ────────────────────────────
       - name: Assert the workload security invariants
         run: |

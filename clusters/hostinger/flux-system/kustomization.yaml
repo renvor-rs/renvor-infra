@@ -1,0 +1,52 @@
+# The bootstrap, applied by hand exactly once:
+#
+#   kubectl apply --server-side -k clusters/hostinger/flux-system/
+#
+# WHY A KUSTOMIZATION RATHER THAN AN EDITED MANIFEST
+# --------------------------------------------------
+# `flux-system.yaml` must stay **byte-identical to upstream**. Its provenance — the published
+# checksum and the verified cosign signature recorded in README.md — is only meaningful while
+# the file is the bytes those signatures cover. Editing it in place to add three flags would
+# void the one thing that proves where it came from.
+#
+# So the hardening is expressed as patches over an untouched base. The result is the same
+# running configuration, with upstream provenance intact and every local change visible as a
+# diff rather than buried in 3,586 lines of vendored YAML.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  # Upstream Flux v2.9.4, unmodified. Checksum and signature in README.md.
+  - flux-system.yaml
+  # The tenancy boundary: two namespaces, one ServiceAccount, two Roles, two RoleBindings.
+  - renvor-tenancy.yaml
+
+patches:
+  # THE THREE FLAGS THAT MAKE THE TENANCY BOUNDARY REAL.
+  #
+  # Without `--default-service-account`, a Kustomization that omits `spec.serviceAccountName`
+  # falls back to the controller's own identity — which is cluster-admin. That failure is
+  # silent and it fails *open*: the deployment works, and nothing indicates it just ran with
+  # the authority this whole design exists to avoid. Setting a default means the fallback is
+  # the restricted identity instead, so omitting the field is safe rather than catastrophic.
+  #
+  # All three are verified present in kustomize-controller v1.9.4 by running the pinned image
+  # with `--help`; they are not assumed from documentation.
+  - target:
+      kind: Deployment
+      name: kustomize-controller
+    patch: |
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --default-service-account=renvor-reconciler
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --no-cross-namespace-refs=true
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --no-remote-bases=true
+
+  # `--no-cross-namespace-refs` is not available on source-controller: it governs references
+  # between custom resources, which source-controller does not follow. Its containment comes
+  # from `--watch-all-namespaces=false`, already set upstream, which confines it to
+  # `flux-system`.

@@ -27,23 +27,32 @@
 ## Layout
 
 ```text
-apps/renvor-site/
+apps/renvor-site/                RECONCILED FROM GIT — namespaced resources only
   base/                    ServiceAccount, Deployment, Service, NetworkPolicy,
                            ResourceQuota, LimitRange — no namespace, no image
-  overlays/staging/        namespace renvor-site-staging, 1 replica, NO ingress
-  overlays/production/     namespace renvor-site, 2 replicas, Issuer, Certificate,
-                           IngressRoutes, Middlewares
-clusters/hostinger/
+  overlays/staging/        1 replica, NO ingress — no Namespace resource
+  overlays/production/     2 replicas, Issuer, Certificate, IngressRoutes,
+                           Middlewares — no Namespace resource
+clusters/hostinger/              APPLIED BY HAND — never reconciled, and excluded
+                                 from the artifact Flux fetches
   gitrepository.yaml       the one source Flux reads — public, no credential
   staging.yaml             Kustomization, prune + wait + health checks
   production.yaml          Kustomization, dependsOn staging
-  flux-system/             the bootstrap manifest, applied by hand once
+  flux-system/             kustomization.yaml applies the two below:
+    flux-system.yaml         upstream Flux v2.9.4, byte-identical, signature verified
+    renvor-tenancy.yaml      the 2 namespaces, the reconciler ServiceAccount,
+                             and its 2 Roles + 2 RoleBindings
+scripts/                   check-tenancy.py and its negative controls
 docs/runbooks/             promote, rollback, certificates, incident checks
 ```
 
-The **base carries no namespace and no image digest**. Each overlay supplies both, so an
-overlay that forgets either fails to build rather than deploying into the wrong place or from
-an unpinned reference.
+The **base carries no namespace and no image digest**. Each overlay supplies the digest, so an
+overlay that forgets it fails to build rather than deploying from an unpinned reference.
+
+**Neither overlay declares a Namespace**, and that is a boundary rather than an omission — see
+[Soft multi-tenancy](#soft-multi-tenancy--stated-precisely) below. The namespaces are created
+once by the hand-applied bootstrap, and reconciliation has no authority to create, relabel, or
+prune them.
 
 ## Rules every workload here satisfies
 
@@ -85,10 +94,46 @@ The source is the **public** `https://github.com/renvor-rs/renvor-infra` over HT
 credential**: no deploy key, no PAT, no `secretRef`. A credential that does not exist cannot
 leak and needs no rotation schedule.
 
-Flux reconciles **one path**, `clusters/hostinger`, into **two namespaces**,
-`renvor-site-staging` and `renvor-site`. Pruning is enabled and is scoped by Flux's own
-ownership labels, so it can only delete objects it created — the unrelated workloads sharing
-this cluster are invisible to it.
+Flux reconciles **two paths** under `apps/renvor-site/overlays/`, into **two namespaces**,
+`renvor-site-staging` and `renvor-site`.
+
+### Soft multi-tenancy — stated precisely
+
+An earlier version of this README claimed the unrelated workloads on this cluster were
+"invisible" to Flux. **That was wrong, and the distinction matters.**
+
+Upstream Flux binds `kustomize-controller` to **`cluster-admin`**, and that binding is retained
+here. It has to be: Kubernetes impersonation requires the impersonator to already hold the
+rights it delegates, so the controller cannot grant `renvor-reconciler` its permissions without
+holding them itself. The Flux controller can therefore see and act on this entire cluster.
+
+What is constrained is **what the public repository can cause it to do**:
+
+| | |
+|---|---|
+| Repository-driven applies run as | `flux-system/renvor-reconciler` — never the controller's own identity |
+| That identity may write | 10 resource types, in 2 namespaces |
+| That identity may read Secrets | **No** — in no namespace, in no verb |
+| Namespaces, nodes, CRDs, RBAC, every cluster-scoped resource | **Denied** |
+| `--default-service-account=renvor-reconciler` | so omitting `serviceAccountName` falls back to the *restricted* identity rather than to cluster-admin |
+| `--no-cross-namespace-refs=true`, `--no-remote-bases=true` | no reaching sideways, no fetching bases from outside the reviewed artifact |
+| `/clusters` in the fetched artifact | **Absent.** The control plane is not merely unreconciled — it is not in the bytes Flux downloads, so a commit cannot edit the objects that constrain commits |
+
+This is **soft multi-tenancy**. A malicious or mistaken commit to the public repository is
+contained by it. A compromise of the `kustomize-controller` process itself is **not** — that
+process still holds cluster-admin. Hard multi-tenancy would need a separate cluster, and this
+project does not claim to have one.
+
+The tenancy boundary — the two namespaces, the ServiceAccount, and the two Roles and
+RoleBindings — is created by the hand-applied bootstrap in
+[`clusters/hostinger/flux-system/renvor-tenancy.yaml`](clusters/hostinger/flux-system/renvor-tenancy.yaml),
+deliberately **not** by the overlays. A reconciler that could create the namespace it runs in
+would need cluster-wide namespace authority, which is exactly what this design removes. The
+overlays reconcile strictly inside a boundary they have no power to move.
+
+Every one of these properties is asserted by `scripts/check-tenancy.py` in CI, and every one of
+those assertions is proven to fail against a deliberately broken tree by
+`scripts/check-tenancy-controls.py`.
 
 Provenance for the bootstrap manifest, including the verified signature, is in
 [`clusters/hostinger/flux-system/README.md`](clusters/hostinger/flux-system/README.md).

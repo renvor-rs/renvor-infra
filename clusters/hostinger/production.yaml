@@ -38,4 +38,9 @@ spec:
       namespace: renvor-site
 
   targetNamespace: renvor-site
+
+  # Same restricted identity as staging — see `staging.yaml` for the full reasoning. Production
+  # must not be the environment that reconciles with more authority.
+  serviceAccountName: renvor-reconciler
+
   force: false
