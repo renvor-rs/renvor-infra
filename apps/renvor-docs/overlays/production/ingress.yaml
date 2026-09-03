@@ -1,0 +1,39 @@
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: renvor-docs-http
+  namespace: renvor-docs
+  labels: { app.kubernetes.io/name: renvor-docs, app.kubernetes.io/part-of: renvor, app.kubernetes.io/managed-by: flux }
+spec:
+  entryPoints: [web]
+  routes:
+    - kind: Rule
+      match: Host(`docs.renvor.dev`)
+      priority: 1
+      middlewares: [{ name: renvor-docs-https-redirect }]
+      services: [{ name: renvor-docs, port: 80 }]
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: renvor-docs-https-redirect
+  namespace: renvor-docs
+  labels: { app.kubernetes.io/name: renvor-docs, app.kubernetes.io/part-of: renvor, app.kubernetes.io/managed-by: flux }
+spec:
+  redirectScheme: { scheme: https, permanent: true }
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: renvor-docs
+  namespace: renvor-docs
+  labels: { app.kubernetes.io/name: renvor-docs, app.kubernetes.io/part-of: renvor, app.kubernetes.io/managed-by: flux }
+spec:
+  entryPoints: [websecure]
+  routes:
+    - kind: Rule
+      match: Host(`docs.renvor.dev`)
+      priority: 10
+      middlewares: [{ name: renvor-docs-ratelimit }, { name: renvor-docs-headers }]
+      services: [{ name: renvor-docs, port: 80 }]
+  tls: { secretName: docs-renvor-dev-tls }

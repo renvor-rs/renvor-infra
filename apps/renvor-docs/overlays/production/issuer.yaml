@@ -1,0 +1,29 @@
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: letsencrypt-staging
+  namespace: renvor-docs
+  labels: { app.kubernetes.io/name: renvor-docs, app.kubernetes.io/part-of: renvor, app.kubernetes.io/managed-by: flux }
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: admin@ahmedanbar.dev
+    privateKeySecretRef: { name: letsencrypt-staging-account-key }
+    solvers:
+      - http01:
+          ingress: { ingressClassName: traefik, serviceType: ClusterIP }
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: letsencrypt-prod
+  namespace: renvor-docs
+  labels: { app.kubernetes.io/name: renvor-docs, app.kubernetes.io/part-of: renvor, app.kubernetes.io/managed-by: flux }
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: admin@ahmedanbar.dev
+    privateKeySecretRef: { name: letsencrypt-prod-account-key }
+    solvers:
+      - http01:
+          ingress: { ingressClassName: traefik, serviceType: ClusterIP }

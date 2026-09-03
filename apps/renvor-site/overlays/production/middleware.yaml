@@ -46,8 +46,8 @@ spec:
     #
     # When it is enabled, in a separate reviewed change:
     #   - a short max-age first, raised only after a renewal has been observed to succeed;
-    #   - NO `includeSubDomains` — `docs.renvor.dev` is undeployed, and asserting HSTS over a
-    #     subdomain that has no certificate would make it unreachable the day it is deployed;
+    #   - NO `includeSubDomains` — `docs.renvor.dev` owns a separate certificate and deployment
+    #     lifecycle, so the apex policy must not silently govern it;
     #   - NO `preload` — that is a submission to a list baked into browser binaries, effectively
     #     permanent, and it requires `includeSubDomains`.
 ---

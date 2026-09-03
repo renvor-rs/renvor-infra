@@ -1,0 +1,17 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: docs-renvor-dev-tls
+  namespace: renvor-docs
+  labels: { app.kubernetes.io/name: renvor-docs, app.kubernetes.io/part-of: renvor, app.kubernetes.io/managed-by: flux }
+spec:
+  secretName: docs-renvor-dev-tls
+  commonName: docs.renvor.dev
+  dnsNames: [docs.renvor.dev]
+  # First issuance deliberately rehearses the complete HTTP-01 path against Let's Encrypt's
+  # staging directory. Production promotion changes only this issuer and deletes the staging
+  # Secret so cert-manager must reissue; see docs/runbooks/certificates.md.
+  issuerRef: { name: letsencrypt-staging, kind: Issuer }
+  privateKey: { algorithm: ECDSA, size: 256, rotationPolicy: Always }
+  duration: 2160h
+  renewBefore: 720h

@@ -3,15 +3,19 @@
 
 Run from the repository root, passing the rendered *application overlays* — and only those:
 
-    kubectl kustomize apps/renvor-site/overlays/staging    > rendered/staging.yaml
-    kubectl kustomize apps/renvor-site/overlays/production > rendered/production.yaml
+    kubectl kustomize apps/renvor-site/overlays/staging     > rendered/site-staging.yaml
+    kubectl kustomize apps/renvor-site/overlays/production  > rendered/site-production.yaml
+    kubectl kustomize apps/renvor-docs/overlays/staging     > rendered/docs-staging.yaml
+    kubectl kustomize apps/renvor-docs/overlays/production  > rendered/docs-production.yaml
     python3 scripts/check-tenancy.py \
-        renvor-site-staging=rendered/staging.yaml \
-        renvor-site=rendered/production.yaml
+        renvor-site-staging=rendered/site-staging.yaml \
+        renvor-site=rendered/site-production.yaml \
+        renvor-docs-staging=rendered/docs-staging.yaml \
+        renvor-docs=rendered/docs-production.yaml
 
-Each argument is `namespace=path`. The namespace is declared rather than inferred because the
-two Roles are deliberately NOT identical: staging renders no IngressRoute, Middleware,
-Certificate or Issuer, and is granted none of them.
+Each argument is `namespace=path`. The namespace is declared rather than inferred because each
+staging Role deliberately differs from its production Role: staging renders no IngressRoute,
+Middleware, Certificate or Issuer, and is granted none of them.
 
 The paths are arguments rather than a glob on purpose. `rendered/` also holds the rendered
 *control plane* — GitRepository and Kustomization objects — which are hand-applied and are
@@ -23,7 +27,7 @@ WHAT THIS IS FOR
 Upstream Flux binds `kustomize-controller` to cluster-admin. Renvor reconciles a **public**
 repository onto a cluster shared with unrelated production workloads, so repository-driven
 applies run as `flux-system/renvor-reconciler` instead — an identity whose whole authority is
-two namespaced Roles.
+four namespaced Roles.
 
 That boundary is made of several separate facts, each of which can be broken independently and
 none of which announces itself when it breaks. The worst of them fails *open*: drop
@@ -45,13 +49,21 @@ import yaml
 
 RECONCILER = "renvor-reconciler"
 FLUX_NS = "flux-system"
-RENVOR_NAMESPACES = {"renvor-site", "renvor-site-staging"}
+RENVOR_NAMESPACES = {
+    "renvor-site", "renvor-site-staging", "renvor-docs", "renvor-docs-staging",
+}
 
 TENANCY = "clusters/hostinger/flux-system/renvor-tenancy.yaml"
 BOOTSTRAP_KUSTOMIZATION = "clusters/hostinger/flux-system/kustomization.yaml"
 GITREPOSITORY = "clusters/hostinger/gitrepository.yaml"
-FLUX_KUSTOMIZATIONS = ["clusters/hostinger/staging.yaml", "clusters/hostinger/production.yaml"]
-OVERLAY_DIRS = ["apps/renvor-site/overlays/staging", "apps/renvor-site/overlays/production"]
+FLUX_KUSTOMIZATIONS = [
+    "clusters/hostinger/staging.yaml", "clusters/hostinger/production.yaml",
+    "clusters/hostinger/docs-staging.yaml", "clusters/hostinger/docs-production.yaml",
+]
+OVERLAY_DIRS = [
+    "apps/renvor-site/overlays/staging", "apps/renvor-site/overlays/production",
+    "apps/renvor-docs/overlays/staging", "apps/renvor-docs/overlays/production",
+]
 
 # Kind -> (apiGroup, RBAC resource name). Deriving the plural by string mangling would guess
 # wrong on the first irregular kind it met, so the mapping is explicit and an unknown kind is a
@@ -124,7 +136,7 @@ REQUIRED_CONTROLLER_ARGS = {
     "--no-remote-bases=true",
 }
 
-# The only hostnames Renvor may route.
+# The hostnames each namespace owns.
 #
 # THIS IS THE ONE PLACE A FULLY RBAC-COMPLIANT COMMIT CAN REACH ANOTHER TENANT. Traefik matches
 # routes cluster-globally by rule and priority; it does not care which namespace an IngressRoute
@@ -133,8 +145,15 @@ REQUIRED_CONTROLLER_ARGS = {
 # priority high enough to outrank the real owner and take its traffic.
 #
 # Namespaced RBAC cannot express that constraint, because the escape is not an API-server
-# authorisation question at all. It has to be asserted here.
-ALLOWED_ROUTE_HOSTS = {"renvor.dev", "www.renvor.dev"}
+# authorisation question at all. A global Renvor allow-list is also insufficient: it would let
+# the landing-site namespace claim docs.renvor.dev, or the docs namespace claim renvor.dev.
+# Ownership therefore has to be asserted for each rendered namespace.
+OWNED_HOSTS_BY_NAMESPACE = {
+    "renvor-site-staging": set(),
+    "renvor-site": {"renvor.dev", "www.renvor.dev"},
+    "renvor-docs-staging": set(),
+    "renvor-docs": {"docs.renvor.dev"},
+}
 
 # `Host(...)` extraction. Traefik accepts backticks, single and double quotes.
 HOST_CALL = re.compile(r"Host\(\s*([`'\"])([^`'\"]+)\1\s*\)")
@@ -142,8 +161,8 @@ HOST_CALL = re.compile(r"Host\(\s*([`'\"])([^`'\"]+)\1\s*\)")
 FORBIDDEN_MATCHERS = ("HostRegexp", "HostSNIRegexp")
 
 
-def route_is_host_restricted(match: str) -> tuple[bool, str]:
-    """Is this Traefik rule confined to the allow-listed hostnames?
+def route_is_host_restricted(match: str, owned_hosts: set[str]) -> tuple[bool, str]:
+    """Is this Traefik rule confined to the current namespace's hostnames?
 
     "CONTAINS AN ALLOWED Host()" IS NOT "RESTRICTED TO ALLOWED HOSTS", and an earlier version of
     this check conflated them. It asserted that at least one `Host()` was present and that every
@@ -174,10 +193,10 @@ def route_is_host_restricted(match: str) -> tuple[bool, str]:
         hosts = {m.group(2) for m in HOST_CALL.finditer(arm)}
         if not hosts:
             return False, f"arm {arm[:44]!r} has no Host() and matches any hostname"
-        foreign = hosts - ALLOWED_ROUTE_HOSTS
+        foreign = hosts - owned_hosts
         if foreign:
-            return False, f"arm names foreign host(s) {sorted(foreign)}"
-    return True, f"{len(arms)} arm(s), each pinned to an allowed host"
+            return False, f"arm names host(s) this namespace does not own: {sorted(foreign)}"
+    return True, f"{len(arms)} arm(s), each pinned to a namespace-owned host"
 
 # NetworkPolicies the overlays are allowed to declare. Policies are ADDITIVE — a second policy
 # cannot tighten the first, only widen the union — so `egress: []` in the default-deny is a
@@ -190,6 +209,9 @@ ALLOWED_NETWORKPOLICIES = {
     # 8089; without it the default-deny blocks the challenge and issuance fails
     # with a 502 that looks like a routing fault.
     "renvor-site-allow-acme-solver",
+    "renvor-docs-default-deny",
+    "renvor-docs-allow-traefik",
+    "renvor-docs-allow-acme-solver",
 }
 
 failures: list[str] = []
@@ -216,11 +238,11 @@ def load(path: str) -> list[dict]:
 
 # ---------------------------------------------------------------- 1. the overlays
 print("== overlays contain only namespaced application resources ==")
-# Each argument is `namespace=path`. The namespace is required rather than inferred: the two
-# Roles are deliberately NOT identical — staging renders no IngressRoute, Middleware,
-# Certificate or Issuer and is granted none of them — so the requirement has to be derived per
-# environment. Guessing which render belongs to which namespace from its contents would be
-# exactly the kind of inference that stops being true the day an overlay changes.
+# Each argument is `namespace=path`. The namespace is required rather than inferred: each
+# staging Role deliberately differs from its production Role — staging renders no IngressRoute,
+# Middleware, Certificate or Issuer and is granted none of them — so the requirement has to be
+# derived per environment. Guessing which render belongs to which namespace from its contents
+# would be exactly the kind of inference that stops being true the day an overlay changes.
 if len(sys.argv) < 2:
     sys.exit("usage: check-tenancy.py <namespace>=<rendered-overlay.yaml> ...  "
              "(see module docstring)")
@@ -268,34 +290,43 @@ check("the overlays actually declare resources", overlay_objects > 0, f"{overlay
 check("the two environments do NOT require the same set",
       required_by_ns.get("renvor-site-staging") != required_by_ns.get("renvor-site"),
       "staging renders fewer kinds, so it must be granted fewer")
+check("the docs environments do NOT require the same set",
+      required_by_ns.get("renvor-docs-staging") != required_by_ns.get("renvor-docs"),
+      "docs staging renders fewer kinds, so it must be granted fewer")
 
 # --------------------------------------------- 1b. the shared ingress is the real escape hatch
 print("\n== no route claims a hostname that is not Renvor's ==")
 routes_seen = 0
 policies_seen = 0
 certs_seen = 0
-for path in rendered:
+for ns, path in sorted(overlay_for.items()):
+    owned_hosts = OWNED_HOSTS_BY_NAMESPACE[ns]
     for d in parse(path):
         if d.get("kind") == "IngressRoute":
             for route in d["spec"].get("routes", []):
                 routes_seen += 1
                 match = route.get("match", "")
                 where = f"{d['metadata']['name']} p={route.get('priority')}"
-                ok, why = route_is_host_restricted(match)
-                check(f"{where}: every match arm is pinned to a Renvor hostname", ok, why)
+                ok, why = route_is_host_restricted(match, owned_hosts)
+                check(f"{ns}/{where}: every match arm is pinned to a namespace-owned hostname",
+                      ok, why)
 
         if d.get("kind") == "Certificate":
             certs_seen += 1
             name = d["metadata"]["name"]
             names = set(d["spec"].get("dnsNames", []))
+            common_name = d["spec"].get("commonName")
+            requested_names = names | ({common_name} if common_name else set())
             # A Certificate is an ACME request. Unconstrained `dnsNames` plus the route hijack
             # above would obtain a GENUINE, browser-trusted certificate for a co-tenant's
             # hostname — worse than the hijack alone, because nothing would look wrong to a
-            # visitor. The same allow-list that bounds routing has to bound issuance.
-            foreign = names - ALLOWED_ROUTE_HOSTS
-            check(f"Certificate/{name} requests only Renvor hostnames", not foreign,
-                  f"foreign {sorted(foreign)}" if foreign else f"{sorted(names)}")
-            check(f"Certificate/{name} requests at least one hostname", bool(names), str(sorted(names)))
+            # visitor. The same namespace ownership rule that bounds routing has to bound every
+            # requested name, including commonName as well as dnsNames.
+            foreign = requested_names - owned_hosts
+            check(f"{ns}/Certificate/{name} requests only namespace-owned hostnames", not foreign,
+                  f"unowned {sorted(foreign)}" if foreign else f"{sorted(requested_names)}")
+            check(f"{ns}/Certificate/{name} requests at least one hostname",
+                  bool(requested_names), str(sorted(requested_names)))
             check(f"Certificate/{name} uses a namespaced Issuer, not a ClusterIssuer",
                   (d["spec"].get("issuerRef") or {}).get("kind") == "Issuer",
                   str((d["spec"].get("issuerRef") or {}).get("kind")))
@@ -311,7 +342,7 @@ for path in rendered:
             # list holds one empty element.
             egress = spec.get("egress") or []
             check(f"NetworkPolicy/{name} opens no egress", not egress, str(egress) or "none")
-            if name == "renvor-site-default-deny":
+            if name.endswith("-default-deny"):
                 # A DEFAULT-DENY THAT SELECTS NO PODS DENIES NOTHING.
                 #
                 # Narrowing `podSelector` to a label no pod carries keeps the name, the
@@ -335,7 +366,8 @@ print("\n== the reconciler's authority matches that requirement exactly ==")
 tenancy = load(TENANCY)
 
 roles = [d for d in tenancy if d.get("kind") == "Role" and d["metadata"]["name"] == RECONCILER]
-check("a Role exists in each Renvor namespace", len(roles) == 2, f"{len(roles)} Roles")
+check("a Role exists in each Renvor namespace", len(roles) == len(RENVOR_NAMESPACES),
+      f"{len(roles)} Roles")
 check("the Roles are in the Renvor namespaces only",
       {r["metadata"]["namespace"] for r in roles} == RENVOR_NAMESPACES,
       str(sorted(r["metadata"]["namespace"] for r in roles)))
@@ -397,7 +429,8 @@ check("no ClusterRoleBinding is defined for the reconciler",
       not [d for d in tenancy if d.get("kind") == "ClusterRoleBinding"], "none")
 
 bindings = [d for d in tenancy if d.get("kind") == "RoleBinding"]
-check("a RoleBinding exists in each Renvor namespace", len(bindings) == 2, f"{len(bindings)}")
+check("a RoleBinding exists in each Renvor namespace", len(bindings) == len(RENVOR_NAMESPACES),
+      f"{len(bindings)}")
 for b in bindings:
     ns = b["metadata"]["namespace"]
     check(f"{ns}: RoleBinding is namespaced to a Renvor namespace", ns in RENVOR_NAMESPACES, ns)
@@ -416,9 +449,9 @@ check("the ServiceAccount is declared in flux-system", len(sas) == 1 and
       sas[0]["metadata"]["namespace"] if sas else "absent")
 
 # ---------------------------------------------------------------- 4. PSA
-print("\n== both Renvor namespaces enforce Pod Security 'restricted' ==")
+print("\n== every Renvor namespace enforces Pod Security 'restricted' ==")
 namespaces = [d for d in tenancy if d.get("kind") == "Namespace"]
-check("both namespaces are declared in the bootstrap",
+check("all namespaces are declared in the bootstrap",
       {n["metadata"]["name"] for n in namespaces} == RENVOR_NAMESPACES,
       str(sorted(n["metadata"]["name"] for n in namespaces)))
 for n in namespaces:

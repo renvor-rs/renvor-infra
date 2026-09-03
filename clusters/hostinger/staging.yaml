@@ -61,7 +61,7 @@ spec:
   # Without this field, kustomize-controller applies as its own ServiceAccount, which upstream
   # Flux binds to cluster-admin — on a cluster that also runs GitLab and three unrelated
   # applications, from a public repository. `renvor-reconciler` can write ten resource types in
-  # two namespaces and nothing else; it cannot read a Secret anywhere.
+  # four namespaces and nothing else; it cannot read a Secret anywhere.
   #
   # This is stated explicitly even though `--default-service-account=renvor-reconciler` on the
   # controller makes it the fallback too. Belt and braces on purpose: the default protects

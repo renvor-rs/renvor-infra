@@ -1,0 +1,22 @@
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: renvor-docs-production
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: renvor-docs-staging
+  interval: 10m
+  retryInterval: 1m
+  timeout: 5m
+  sourceRef: { kind: GitRepository, name: renvor-infra }
+  path: ./apps/renvor-docs/overlays/production
+  prune: true
+  wait: true
+  healthCheckExprs:
+    - apiVersion: cert-manager.io/v1
+      kind: Certificate
+      current: "status.conditions.exists(c, c.type == 'Ready' && c.status == 'True')"
+  targetNamespace: renvor-docs
+  serviceAccountName: renvor-reconciler
+  force: false

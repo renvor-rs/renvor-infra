@@ -12,8 +12,8 @@
 # could reach every workload and every Secret on this machine.
 #
 # So repository-driven reconciliation does not run as that identity. It runs as
-# `flux-system/renvor-reconciler`, whose entire authority is the two Roles below: ten resource
-# types, in two namespaces, and nothing else. `kustomize-controller` retains its upstream
+# `flux-system/renvor-reconciler`, whose entire authority is the four Roles below: ten resource
+# types, in four namespaces, and nothing else. `kustomize-controller` retains its upstream
 # cluster-admin binding, but uses it only to *impersonate* this ServiceAccount — Kubernetes
 # impersonation requires the impersonator to already hold the rights it delegates.
 #
@@ -82,6 +82,38 @@ metadata:
   annotations:
     renvor.dev/purpose: 'Serves https://renvor.dev and the www redirect.'
 ---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: renvor-docs-staging
+  labels:
+    app.kubernetes.io/name: renvor-docs
+    app.kubernetes.io/part-of: renvor
+    app.kubernetes.io/managed-by: bootstrap
+    renvor.dev/environment: staging
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+  annotations:
+    renvor.dev/purpose: 'Validates the documentation image digest before production promotion.'
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: renvor-docs
+  labels:
+    app.kubernetes.io/name: renvor-docs
+    app.kubernetes.io/part-of: renvor
+    app.kubernetes.io/managed-by: bootstrap
+    renvor.dev/environment: production
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+  annotations:
+    renvor.dev/purpose: 'Serves https://docs.renvor.dev.'
+---
 # The identity every repository-driven apply runs as.
 #
 # It has no token mounted anywhere and is never used by a Pod. It exists only to be
@@ -129,8 +161,8 @@ metadata:
 #     what keeps "it can only run what a Deployment schedules" true.
 #
 # DELIBERATELY ABSENT, each because nothing needs it:
-#   - `secrets` — in any verb. The only Secret in this design is the TLS keypair, and
-#     cert-manager creates it under cert-manager's own identity. The reconciler never reads,
+#   - `secrets` — in any verb. TLS keypairs and ACME account keys exist at runtime, but
+#     cert-manager creates them under cert-manager's own identity. The reconciler never reads,
 #     writes, or lists a Secret, so a compromised commit cannot exfiltrate one.
 #   - `configmaps` — no application configuration exists; the server's config is in the image.
 #   - `namespaces` — the boundary is above this Role, not inside it.
@@ -167,8 +199,8 @@ rules:
   # The staging overlay renders neither, and staging has no hostname by design. Granting them
   # anyway would let a staging manifest create an IngressRoute — and because Traefik routes
   # cluster-globally, a staging route claiming `Host(`renvor.dev`)` would contend with
-  # production for real traffic. The hostname allow-list in CI would not catch it: `renvor.dev`
-  # is on the allow-list, just not for this environment.
+  # production for real traffic. CI therefore assigns an empty hostname set to each staging
+  # namespace and rejects any route or Certificate it tries to add.
   #
   # These two Roles are therefore NOT copies of each other. Production has four resource types
   # staging does not, because production renders four kinds staging does not.
@@ -182,8 +214,9 @@ rules:
     resources: ['pods']
     verbs: ['get', 'list', 'watch']
 ---
-# Production. Identical rules to staging — the environments differ in what they deploy, never in
-# how much authority the deployer has.
+# Production adds only the cert-manager and Traefik resource types its overlay renders. The
+# checker derives each namespace's required grants from that namespace's rendered overlay and
+# refuses both missing and surplus authority.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -218,6 +251,64 @@ rules:
     resources: ['pods']
     verbs: ['get', 'list', 'watch']
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: renvor-reconciler
+  namespace: renvor-docs-staging
+  labels:
+    app.kubernetes.io/name: renvor-reconciler
+    app.kubernetes.io/part-of: renvor
+    app.kubernetes.io/managed-by: bootstrap
+rules:
+  - apiGroups: ['']
+    resources: ['services', 'serviceaccounts', 'limitranges', 'resourcequotas']
+    verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete']
+  - apiGroups: ['apps']
+    resources: ['deployments']
+    verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete']
+  - apiGroups: ['networking.k8s.io']
+    resources: ['networkpolicies']
+    verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete']
+  - apiGroups: ['apps']
+    resources: ['replicasets']
+    verbs: ['get', 'list', 'watch']
+  - apiGroups: ['']
+    resources: ['pods']
+    verbs: ['get', 'list', 'watch']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: renvor-reconciler
+  namespace: renvor-docs
+  labels:
+    app.kubernetes.io/name: renvor-reconciler
+    app.kubernetes.io/part-of: renvor
+    app.kubernetes.io/managed-by: bootstrap
+rules:
+  - apiGroups: ['']
+    resources: ['services', 'serviceaccounts', 'limitranges', 'resourcequotas']
+    verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete']
+  - apiGroups: ['apps']
+    resources: ['deployments']
+    verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete']
+  - apiGroups: ['networking.k8s.io']
+    resources: ['networkpolicies']
+    verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete']
+  - apiGroups: ['cert-manager.io']
+    resources: ['certificates', 'issuers']
+    verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete']
+  - apiGroups: ['traefik.io']
+    resources: ['ingressroutes', 'middlewares']
+    verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete']
+  - apiGroups: ['apps']
+    resources: ['replicasets']
+    verbs: ['get', 'list', 'watch']
+  - apiGroups: ['']
+    resources: ['pods']
+    verbs: ['get', 'list', 'watch']
+---
 # RoleBinding, not ClusterRoleBinding. A RoleBinding grants its Role only within its own
 # namespace, so even though the subject lives in `flux-system`, its authority stops at the
 # boundary of `renvor-site-staging`.
@@ -244,6 +335,42 @@ kind: RoleBinding
 metadata:
   name: renvor-reconciler
   namespace: renvor-site
+  labels:
+    app.kubernetes.io/name: renvor-reconciler
+    app.kubernetes.io/part-of: renvor
+    app.kubernetes.io/managed-by: bootstrap
+subjects:
+  - kind: ServiceAccount
+    name: renvor-reconciler
+    namespace: flux-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: renvor-reconciler
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: renvor-reconciler
+  namespace: renvor-docs-staging
+  labels:
+    app.kubernetes.io/name: renvor-reconciler
+    app.kubernetes.io/part-of: renvor
+    app.kubernetes.io/managed-by: bootstrap
+subjects:
+  - kind: ServiceAccount
+    name: renvor-reconciler
+    namespace: flux-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: renvor-reconciler
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: renvor-reconciler
+  namespace: renvor-docs
   labels:
     app.kubernetes.io/name: renvor-reconciler
     app.kubernetes.io/part-of: renvor

@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: renvor-docs
+  labels:
+    app.kubernetes.io/name: renvor-docs
+    app.kubernetes.io/component: documentation
+    app.kubernetes.io/part-of: renvor
+    app.kubernetes.io/managed-by: flux
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: renvor-docs
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP

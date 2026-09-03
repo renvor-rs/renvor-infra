@@ -2,7 +2,7 @@
 #
 #   kubectl apply --server-side -k clusters/hostinger/
 #
-# It holds the source definition and the two Kustomizations, and nothing else. In particular it
+# It holds the source definition and the four Kustomizations, and nothing else. In particular it
 # does NOT include `flux-system/` — the controllers and the tenancy boundary are a separate
 # hand-applied bootstrap, so a bad commit cannot take down the thing that would have to apply
 # the fix.
@@ -22,3 +22,5 @@ resources:
   - gitrepository.yaml
   - staging.yaml
   - production.yaml
+  - docs-staging.yaml
+  - docs-production.yaml
