@@ -80,7 +80,7 @@ jobs:
           # adds the three controller flags is otherwise never exercised, and a wrong path in it
           # would surface for the first time during a live bootstrap — producing a controller
           # with no `--default-service-account`, which fails open to cluster-admin.
-          for o in apps/renvor-site/overlays/staging apps/renvor-site/overlays/production clusters/hostinger clusters/hostinger/flux-system; do
+          for o in apps/renvor-site/overlays/staging apps/renvor-site/overlays/production apps/renvor-docs/overlays/staging apps/renvor-docs/overlays/production clusters/hostinger clusters/hostinger/flux-system; do
             name="$(echo "$o" | tr '/' '-')"
             echo "── $o"
             kubectl kustomize "$o" > "rendered/${name}.yaml"
@@ -142,13 +142,15 @@ jobs:
           # The Roles are checked against the resource types the overlays actually render, in
           # both directions — a missing grant breaks the deploy, a surplus grant is authority
           # nobody asked for.
-          # The two overlay renders are named explicitly rather than globbed: `rendered/` also
+          # The four overlay renders are named explicitly rather than globbed: `rendered/` also
           # holds the rendered control plane, whose GitRepository and Kustomization objects are
           # legitimately the kinds this check forbids *inside an overlay*. Copying them to
           # shorter names would also duplicate every resource for the later duplicate detector.
           python3 scripts/check-tenancy.py \
             renvor-site-staging=rendered/apps-renvor-site-overlays-staging.yaml \
-            renvor-site=rendered/apps-renvor-site-overlays-production.yaml
+            renvor-site=rendered/apps-renvor-site-overlays-production.yaml \
+            renvor-docs-staging=rendered/apps-renvor-docs-overlays-staging.yaml \
+            renvor-docs=rendered/apps-renvor-docs-overlays-production.yaml
 
       - name: Prove every tenancy check is live
         run: |
@@ -157,7 +159,9 @@ jobs:
           # a throwaway copy of the tree, and fails the build if any tampered tree still passes.
           python3 scripts/check-tenancy-controls.py \
             renvor-site-staging=rendered/apps-renvor-site-overlays-staging.yaml \
-            renvor-site=rendered/apps-renvor-site-overlays-production.yaml
+            renvor-site=rendered/apps-renvor-site-overlays-production.yaml \
+            renvor-docs-staging=rendered/apps-renvor-docs-overlays-staging.yaml \
+            renvor-docs=rendered/apps-renvor-docs-overlays-production.yaml
 
       # ── The security properties this repository promises ────────────────────────────
       - name: Assert the workload security invariants
@@ -256,8 +260,10 @@ jobs:
           for path in sorted(glob.glob('rendered/apps-*.yaml')):
               policies = [d for d in yaml.safe_load_all(open(path)) if d and d.get('kind') == 'NetworkPolicy']
               names = {p['metadata']['name'] for p in policies}
-              if 'renvor-site-default-deny' not in names:
-                  failures.append(f"{path}: no default-deny NetworkPolicy")
+              default_denies = [name for name in names if name.endswith('-default-deny')]
+              if len(default_denies) != 1:
+                  failures.append(
+                      f"{path}: expected exactly one default-deny NetworkPolicy, found {default_denies}")
               for p in policies:
                   seen += 1
                   name = p['metadata']['name']
@@ -333,15 +339,15 @@ jobs:
               'ValidatingWebhookConfiguration', 'MutatingWebhookConfiguration',
               'APIService', 'PriorityClass', 'IngressClass', 'RuntimeClass',
           }
-          RENVOR_NS = {'renvor-site', 'renvor-site-staging'}
+          RENVOR_NS = {'renvor-site', 'renvor-site-staging', 'renvor-docs', 'renvor-docs-staging'}
 
           # What the hand-applied bootstrap is allowed to create, exactly. Upstream Flux
           # legitimately ships cluster-scoped objects; the point is that the inventory is fixed
           # and reviewed, so a new one arriving is visible rather than assumed fine.
           BOOTSTRAP_EXPECTED = {
               'CustomResourceDefinition': 7, 'ClusterRole': 3, 'ClusterRoleBinding': 2,
-              'Namespace': 3, 'ServiceAccount': 3, 'Deployment': 2, 'Service': 1,
-              'NetworkPolicy': 3, 'ResourceQuota': 1, 'Role': 2, 'RoleBinding': 2,
+              'Namespace': 5, 'ServiceAccount': 3, 'Deployment': 2, 'Service': 1,
+              'NetworkPolicy': 3, 'ResourceQuota': 1, 'Role': 4, 'RoleBinding': 4,
           }
 
           bad, counted = [], 0
@@ -350,7 +356,7 @@ jobs:
               counted += len(docs)
               if path.startswith('rendered/apps-'):
                   # RECONCILED FROM A PUBLIC REPOSITORY. Nothing cluster-scoped, nothing outside
-                  # the two Renvor namespaces. The reconciler has no authority for either, so
+                  # the four Renvor namespaces. The reconciler has no authority outside them, so
                   # this duplicates RBAC on purpose — it fails in review rather than at apply.
                   for d in docs:
                       kind = d.get('kind'); name = d.get('metadata', {}).get('name')

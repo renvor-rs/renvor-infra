@@ -106,6 +106,6 @@ spec:
   tls:
     secretName: renvor-dev-tls
 
-# NO ROUTE FOR docs.renvor.dev. It resolves to this same origin and currently returns Traefik's
-# default 404. `renvor-rs/renvor-docs` is commit-empty and its migration is gated on T108, so
-# claiming the hostname here would deploy nothing while making the gate look closed.
+# No route for docs.renvor.dev belongs in this file. The documentation production overlay owns
+# that hostname, certificate and service independently; this resource stays scoped to the apex
+# landing site and its `www` redirect.

@@ -29,15 +29,20 @@ BOOTSTRAP = "clusters/hostinger/flux-system/kustomization.yaml"
 # The rendered overlays to hand the checker, taken from argv so CI and a local run can each use
 # whatever filenames their render step produced. The first is the one the two "something
 # forbidden reappears in a reconciled overlay" controls append to.
-# Arguments are `namespace=path`, matching check-tenancy.py — the two Roles are deliberately
-# different, so the checker needs to know which render belongs to which namespace.
-ARGS = sys.argv[1:] or ["renvor-site-staging=rendered/staging.yaml",
-                        "renvor-site=rendered/production.yaml"]
+# Arguments are `namespace=path`, matching check-tenancy.py — staging and production Roles are
+# deliberately different, so the checker needs to know which render belongs to which namespace.
+ARGS = sys.argv[1:] or [
+    "renvor-site-staging=rendered/site-staging.yaml",
+    "renvor-site=rendered/site-production.yaml",
+    "renvor-docs-staging=rendered/docs-staging.yaml",
+    "renvor-docs=rendered/docs-production.yaml",
+]
 OVERLAY_FOR = dict(a.split("=", 1) for a in ARGS)
 RENDERS = list(OVERLAY_FOR.values())
 STAGING_RENDER = OVERLAY_FOR["renvor-site-staging"]
-# The production render — the only one carrying IngressRoutes.
+# The two production renders carry the public routes and certificate requests.
 PROD_RENDER = OVERLAY_FOR["renvor-site"]
+DOCS_PROD_RENDER = OVERLAY_FOR["renvor-docs"]
 
 
 def edit(root: pathlib.Path, rel: str, fn) -> None:
@@ -142,8 +147,9 @@ CONTROLS = [
                        + "# --no-remote-bases=true\n"),
     ),
     (
-        # The two Roles are intentionally different. If staging regained traefik.io, a staging
-        # manifest could create an IngressRoute claiming `Host(`renvor.dev`)` — an allow-listed
+        # The staging and production Roles are intentionally different. If staging regained
+        # traefik.io, a staging manifest could create an IngressRoute claiming
+        # `Host(`renvor.dev`)` — an allow-listed
         # hostname, so the route gate would pass it — and contend with production for real
         # traffic through the shared Traefik.
         "staging regains a grant only production needs",
@@ -223,6 +229,31 @@ CONTROLS = [
         lambda r: edit(r, PROD_RENDER,
                        lambda t: t.replace("Host(`renvor.dev`)",
                                            "Host(`gitlab.ahmedanbar.dev`)", 1)),
+    ),
+    (
+        "the landing-site namespace claims the documentation hostname",
+        lambda r: edit(r, PROD_RENDER,
+                       lambda t: t.replace("Host(`renvor.dev`)",
+                                           "Host(`docs.renvor.dev`)", 1)),
+    ),
+    (
+        "the documentation namespace claims the landing-site hostname",
+        lambda r: edit(r, DOCS_PROD_RENDER,
+                       lambda t: t.replace("Host(`docs.renvor.dev`)",
+                                           "Host(`renvor.dev`)", 1)),
+    ),
+    (
+        "the landing-site certificate requests the documentation hostname",
+        lambda r: edit(r, PROD_RENDER,
+                       lambda t: t.replace("  - www.renvor.dev\n",
+                                           "  - docs.renvor.dev\n", 1)),
+    ),
+    (
+        "the documentation certificate requests the landing-site hostname",
+        lambda r: edit(r, DOCS_PROD_RENDER,
+                       lambda t: t.replace(
+                           "  commonName: docs.renvor.dev\n  dnsNames:\n  - docs.renvor.dev\n",
+                           "  commonName: renvor.dev\n  dnsNames:\n  - renvor.dev\n", 1)),
     ),
     (
         "an IngressRoute installs a bare catch-all with no Host() term",

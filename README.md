@@ -1,15 +1,19 @@
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/renvor-lockup-v21-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="assets/renvor-lockup-v21-light.svg">
-    <img alt="Renvor" src="assets/renvor-lockup-v21-light.svg" width="360">
-  </picture>
-</p>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/renvor-infra-readme-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset=".github/assets/renvor-infra-readme-light.svg">
+  <img alt="Renvor Infra" src=".github/assets/renvor-infra-readme-light.svg" width="100%">
+</picture>
 
 <h1 align="center">Renvor — infra</h1>
 
 <p align="center">
   Kubernetes deployment configuration and public operational documentation for Renvor.
+</p>
+
+<p align="center">
+  <a href="https://github.com/renvor-rs/renvor-infra/actions/workflows/infra-ci.yml"><img alt="Infrastructure CI" src="https://github.com/renvor-rs/renvor-infra/actions/workflows/infra-ci.yml/badge.svg?branch=main"></a>
+  <a href="clusters/hostinger/flux-system/README.md"><img alt="Flux 2.9.4" src="https://img.shields.io/badge/Flux-2.9.4-5468FF.svg?logo=flux&amp;logoColor=white"></a>
+  <a href=".github/workflows/infra-ci.yml"><img alt="Kubernetes 1.35.5" src="https://img.shields.io/badge/Kubernetes-1.35.5-326CE5.svg?logo=kubernetes&amp;logoColor=white"></a>
 </p>
 
 ---
@@ -29,7 +33,8 @@
 > `http://` and `https://www.` both 301 to `https://renvor.dev` preserving path and query;
 > the `Content-Security-Policy` header byte-identical to the published `/_csp/policy.txt`;
 > the digest running in both namespaces identical to the one whose provenance was verified.
-> `docs.renvor.dev` returns 404 and is deliberately unrouted.
+> This branch adds a separate documentation workload and route for `docs.renvor.dev`; live TLS and
+> serving status are recorded only after Flux has reconciled the reviewed image digest.
 >
 > **HSTS is not enabled yet.** It is close to irreversible once a browser caches it, so it
 > waits until a renewal has been observed to succeed. See `overlays/production/middleware.yaml`.
@@ -43,15 +48,23 @@ apps/renvor-site/                RECONCILED FROM GIT — namespaced resources on
   overlays/staging/        1 replica, NO ingress — no Namespace resource
   overlays/production/     2 replicas, Issuer, Certificate, IngressRoutes,
                            Middlewares — no Namespace resource
+apps/renvor-docs/                RECONCILED FROM GIT — an isolated documentation workload
+  base/                    ServiceAccount, Deployment, Service, NetworkPolicy,
+                           ResourceQuota, LimitRange — no namespace, no image
+  overlays/staging/        1 replica, NO ingress — no Namespace resource
+  overlays/production/     2 replicas, Issuer, Certificate, IngressRoutes,
+                           Middlewares — no Namespace resource
 clusters/hostinger/              APPLIED BY HAND — never reconciled, and excluded
                                  from the artifact Flux fetches
   gitrepository.yaml       the one source Flux reads — public, no credential
-  staging.yaml             Kustomization, prune + wait + health checks
-  production.yaml          Kustomization, dependsOn staging
+  staging.yaml             landing-site staging Kustomization
+  production.yaml          landing-site production, dependsOn its staging
+  docs-staging.yaml        documentation staging Kustomization
+  docs-production.yaml     documentation production, dependsOn its staging
   flux-system/             kustomization.yaml applies the two below:
     flux-system.yaml         upstream Flux v2.9.4, byte-identical, signature verified
-    renvor-tenancy.yaml      the 2 namespaces, the reconciler ServiceAccount,
-                             and its 2 Roles + 2 RoleBindings
+    renvor-tenancy.yaml      the 4 namespaces, the reconciler ServiceAccount,
+                             and its 4 Roles + 4 RoleBindings
 scripts/                   check-tenancy.py and its negative controls
 docs/runbooks/             promote, rollback, certificates, incident checks
 ```
@@ -104,8 +117,9 @@ The source is the **public** `https://github.com/renvor-rs/renvor-infra` over HT
 credential**: no deploy key, no PAT, no `secretRef`. A credential that does not exist cannot
 leak and needs no rotation schedule.
 
-Flux reconciles **two paths** under `apps/renvor-site/overlays/`, into **two namespaces**,
-`renvor-site-staging` and `renvor-site`.
+Flux reconciles **four paths** under `apps/`: landing-site and documentation overlays for staging
+and production. They target `renvor-site-staging`, `renvor-site`, `renvor-docs-staging`, and
+`renvor-docs`.
 
 ### Soft multi-tenancy — stated precisely
 
@@ -122,7 +136,7 @@ What is constrained is **what the public repository can cause it to do**:
 | | |
 |---|---|
 | Repository-driven applies run as | `flux-system/renvor-reconciler` — never the controller's own identity |
-| That identity may write | 10 resource types, in 2 namespaces |
+| That identity may write | 10 resource types, in 4 namespaces |
 | That identity may read Secrets | **No** — in no namespace, in no verb |
 | Namespaces, nodes, CRDs, RBAC, every cluster-scoped resource | **Denied** |
 | `--default-service-account=renvor-reconciler` | so omitting `serviceAccountName` falls back to the *restricted* identity rather than to cluster-admin |
@@ -134,7 +148,7 @@ contained by it. A compromise of the `kustomize-controller` process itself is **
 process still holds cluster-admin. Hard multi-tenancy would need a separate cluster, and this
 project does not claim to have one.
 
-The tenancy boundary — the two namespaces, the ServiceAccount, and the two Roles and
+The tenancy boundary — the four namespaces, the ServiceAccount, and the four Roles and
 RoleBindings — is created by the hand-applied bootstrap in
 [`clusters/hostinger/flux-system/renvor-tenancy.yaml`](clusters/hostinger/flux-system/renvor-tenancy.yaml),
 deliberately **not** by the overlays. A reconciler that could create the namespace it runs in
@@ -184,7 +198,7 @@ from the bytes it protects. The image publishes it at `/_csp/policy.txt`.
 |---|---|
 | `renvor.dev` | Yes — the landing site |
 | `www.renvor.dev` | Yes — permanent 301 to `https://renvor.dev`, path and query preserved |
-| `docs.renvor.dev` | **No.** `renvor-rs/renvor-docs` is commit-empty and its migration is gated on T108. No route is created for it, and claiming the hostname would make an open gate look closed |
+| `docs.renvor.dev` | Yes — a dedicated documentation workload, certificate, redirect, and HTTPS route owned by `apps/renvor-docs/overlays/production` |
 
 ## Secrets
 
@@ -192,10 +206,10 @@ from the bytes it protects. The image publishes it at `/_csp/policy.txt`.
 kubeconfig, or `.env` value. No privileged workload, and no host filesystem mount without
 independent justification. See `.gitignore` for the enforced patterns.
 
-The two Secrets that exist at runtime — the ACME account key and the TLS certificate — are
-created and managed by cert-manager inside the cluster. **Their contents are never read,
-printed, logged, or committed.** Verification looks at a Certificate's `Ready` condition and at
-what the server presents on the wire.
+The ACME account keys and TLS certificates that exist at runtime are created and managed by
+cert-manager inside the production namespaces. **Their contents are never read, printed, logged,
+or committed.** Verification looks at each Certificate's `Ready` condition and at what the server
+presents on the wire.
 
 ## Related repositories
 
@@ -203,7 +217,7 @@ what the server presents on the wire.
 |---|---|
 | [`renvor-rs/renvor`](https://github.com/renvor-rs/renvor) | Framework source, governance, and decision records |
 | [`renvor-rs/renvor-site`](https://github.com/renvor-rs/renvor-site) | The landing page, and the workflow that publishes its image |
-| [`renvor-rs/renvor-docs`](https://github.com/renvor-rs/renvor-docs) | Reserved for the documentation site. Commit-empty |
+| [`renvor-rs/renvor-docs`](https://github.com/renvor-rs/renvor-docs) | Docusaurus documentation source and immutable image-publishing workflow |
 
 ## Licence
 

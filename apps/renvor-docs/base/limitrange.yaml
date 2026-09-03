@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: renvor-docs
+  labels:
+    app.kubernetes.io/name: renvor-docs
+    app.kubernetes.io/part-of: renvor
+    app.kubernetes.io/managed-by: flux
+spec:
+  limits:
+    - type: Container
+      default: { cpu: 200m, memory: 128Mi, ephemeral-storage: 256Mi }
+      defaultRequest: { cpu: 10m, memory: 32Mi, ephemeral-storage: 64Mi }
+      max: { cpu: 500m, memory: 256Mi, ephemeral-storage: 512Mi }
+      min: { cpu: 5m, memory: 16Mi }

@@ -1,0 +1,36 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: renvor-docs-default-deny
+  labels:
+    app.kubernetes.io/name: renvor-docs
+    app.kubernetes.io/part-of: renvor
+    app.kubernetes.io/managed-by: flux
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: renvor-docs-allow-traefik
+  labels:
+    app.kubernetes.io/name: renvor-docs
+    app.kubernetes.io/part-of: renvor
+    app.kubernetes.io/managed-by: flux
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: renvor-docs
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+      ports:
+        - protocol: TCP
+          port: 8080

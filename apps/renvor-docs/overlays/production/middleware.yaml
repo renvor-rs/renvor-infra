@@ -1,0 +1,26 @@
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: renvor-docs-headers
+  namespace: renvor-docs
+  labels: { app.kubernetes.io/name: renvor-docs, app.kubernetes.io/part-of: renvor, app.kubernetes.io/managed-by: flux }
+spec:
+  headers:
+    contentTypeNosniff: true
+    frameDeny: true
+    referrerPolicy: no-referrer
+    permissionsPolicy: >-
+      accelerometer=(), autoplay=(), camera=(), display-capture=(), encrypted-media=(),
+      fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), midi=(),
+      payment=(), picture-in-picture=(), publickey-credentials-get=(), screen-wake-lock=(),
+      usb=(), xr-spatial-tracking=()
+    customResponseHeaders: { Server: '', X-Powered-By: '' }
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: renvor-docs-ratelimit
+  namespace: renvor-docs
+  labels: { app.kubernetes.io/name: renvor-docs, app.kubernetes.io/part-of: renvor, app.kubernetes.io/managed-by: flux }
+spec:
+  rateLimit: { average: 100, burst: 200, period: 1m }

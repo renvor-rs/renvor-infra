@@ -18,7 +18,7 @@ kind: Kustomization
 resources:
   # Upstream Flux v2.9.4, unmodified. Checksum and signature in README.md.
   - flux-system.yaml
-  # The tenancy boundary: two namespaces, one ServiceAccount, two Roles, two RoleBindings.
+  # The tenancy boundary: four namespaces, one ServiceAccount, four Roles, four RoleBindings.
   - renvor-tenancy.yaml
 
 patches:

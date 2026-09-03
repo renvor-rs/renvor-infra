@@ -41,7 +41,7 @@ spec:
   timeout: 60s
 # `/clusters` IS DELIBERATELY NOT RE-INCLUDED, AND THAT IS A SECURITY BOUNDARY.
 #
-# This directory holds the Flux control plane: this GitRepository, both Kustomizations, and the
+# This directory holds the Flux control plane: this GitRepository, all four Kustomizations, and the
 # tenancy bootstrap that constrains them. Those objects are applied by hand from a reviewed
 # commit and are never reconciled.
 #
