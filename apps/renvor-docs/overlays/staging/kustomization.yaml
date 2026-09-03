@@ -8,7 +8,7 @@ resources:
 
 images:
   - name: ghcr.io/renvor-rs/renvor-docs
-    digest: sha256:9240f8621a7bbfe735cb895298cc9fe6a75572e2e011a68d4405e11ee69ebfcd
+    digest: sha256:8dee47665ac5b27cb77131db1bac3a6067a7616a6e590aac0e4f43741262872f
 
 patches:
   - target:
