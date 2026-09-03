@@ -58,16 +58,21 @@ issuerRef:
   name: letsencrypt-prod   # was letsencrypt-staging
 ```
 
-After that commit is merged and reconciled, delete only the staging-issued Secret so cert-manager
-must reissue from production:
+After that commit is merged and reconciled, cert-manager should create a new CertificateRequest
+for `letsencrypt-prod` while continuing to serve the staging-issued Secret. Watch the request and
+Certificate until the production issuance replaces it:
 
 ```sh
-kubectl -n "$NAMESPACE" delete secret "$CERTIFICATE"
+kubectl -n "$NAMESPACE" get certificaterequest,order,challenge -w
 kubectl -n "$NAMESPACE" get certificate "$CERTIFICATE" -w
 ```
 
-The landing-site certificate has already completed this promotion. A newly introduced docs
-certificate must complete it independently; one hostname's successful issuance proves nothing
+Do not delete a healthy, currently served Secret merely to trigger reissuance; that creates an
+avoidable TLS gap. If changing `issuerRef` does not create a production CertificateRequest, stop
+and inspect the Certificate events rather than destroying the last working certificate.
+
+The landing-site and documentation certificates have each completed this promotion independently.
+A newly introduced hostname must do the same; one hostname's successful issuance proves nothing
 about another hostname's DNS and challenge route.
 
 ## When a challenge fails

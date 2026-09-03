@@ -9,8 +9,8 @@ spec:
   commonName: docs.renvor.dev
   dnsNames: [docs.renvor.dev]
   # The staging-directory rehearsal reached Ready=True and served its certificate on the wire
-  # before this promotion. Delete the staging-issued Secret after Flux applies this change so
-  # cert-manager must obtain a production certificate; see docs/runbooks/certificates.md.
+  # before this promotion. Changing issuerRef made cert-manager reissue in place without deleting
+  # the certificate Secret or interrupting TLS; see docs/runbooks/certificates.md.
   issuerRef: { name: letsencrypt-prod, kind: Issuer }
   privateKey: { algorithm: ECDSA, size: 256, rotationPolicy: Always }
   duration: 2160h
