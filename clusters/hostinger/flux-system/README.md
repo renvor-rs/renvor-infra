@@ -13,7 +13,7 @@ in together:
 | File | What it is |
 |---|---|
 | `flux-system.yaml` | upstream Flux v2.9.4, **byte-identical**, signature verified below |
-| `renvor-tenancy.yaml` | the tenancy boundary — 2 namespaces, the reconciler ServiceAccount, 2 Roles, 2 RoleBindings |
+| `renvor-tenancy.yaml` | the tenancy boundary — 4 namespaces, the reconciler ServiceAccount, 4 Roles, 4 RoleBindings |
 | `kustomization.yaml` | combines those two and patches three hardening flags into `kustomize-controller` |
 
 `flux-system.yaml` is **not** edited in place, and the reason is the provenance table below:
@@ -77,11 +77,13 @@ ResourceQuota — all in `flux-system`.
 - **One source:** the **public** `https://github.com/renvor-rs/renvor-infra` over HTTPS, with
   **no credential of any kind** — no deploy key, no PAT, no `secretRef`. The repository is
   public, so anonymous read is sufficient, and there is nothing to rotate or leak.
-- **Two paths, both under `apps/`:** the staging and production overlays. `/clusters` is not
+- **Four paths, all under `apps/`:** staging and production overlays for the landing site and
+  documentation. `/clusters` is not
   even present in the fetched artifact, so the control plane cannot reconcile itself.
-- **Renvor namespaces only.** The Kustomizations name `renvor-site-staging` and `renvor-site`,
+- **Renvor namespaces only.** The Kustomizations name `renvor-site-staging`, `renvor-site`,
+  `renvor-docs-staging`, and `renvor-docs`,
   and — more importantly than naming — reconcile as `renvor-reconciler`, which has no authority
-  outside those two namespaces. Flux is never pointed at `gitlab`, `attaa`, `codexhub`,
+  outside those four namespaces. Flux is never pointed at `gitlab`, `attaa`, `codexhub`,
   `portfolio`, or `kube-system`, and could not write to them if it were.
 
 ## Applying it
