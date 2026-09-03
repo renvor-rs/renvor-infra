@@ -8,10 +8,10 @@ spec:
   secretName: docs-renvor-dev-tls
   commonName: docs.renvor.dev
   dnsNames: [docs.renvor.dev]
-  # First issuance deliberately rehearses the complete HTTP-01 path against Let's Encrypt's
-  # staging directory. Production promotion changes only this issuer and deletes the staging
-  # Secret so cert-manager must reissue; see docs/runbooks/certificates.md.
-  issuerRef: { name: letsencrypt-staging, kind: Issuer }
+  # The staging-directory rehearsal reached Ready=True and served its certificate on the wire
+  # before this promotion. Delete the staging-issued Secret after Flux applies this change so
+  # cert-manager must obtain a production certificate; see docs/runbooks/certificates.md.
+  issuerRef: { name: letsencrypt-prod, kind: Issuer }
   privateKey: { algorithm: ECDSA, size: 256, rotationPolicy: Always }
   duration: 2160h
   renewBefore: 720h
