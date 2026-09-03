@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="420" viewBox="0 0 1600 420" role="img" aria-labelledby="title desc">
+  <title id="title">Renvor Infra repository logo - light</title>
+  <desc id="desc">The canonical Renvor identity paired with a three-level infrastructure rail stack.</desc>
+  <rect width="1600" height="420" fill="#F5F6F2"/>
+  <path d="M0 0H1600" stroke="#F0C400" stroke-width="8"/>
+  <g transform="translate(62 64) scale(2.2)">
+    <path fill-rule="evenodd" clip-rule="evenodd" d="M110 111.25H92.75L40.25 53.5L40.75 42.75H73.75C78.2 42.75 81 39.5 81 34.5C81 29.5 78 24.5 73.75 24.5H37.75L37.25 67.25L23 47.5C21.5 46 20.25 45.5 20.25 45.5V14.25C20.25 10.5 23 8 26.25 8H76C88 8 97.5 18.5 97.5 31.5C97.5 45 89.5 54 76.25 57.5C72 58 69 58 66.25 58L111 107.25C112 108.5 111.8 110 110 111.25ZM20.25 72L37.5 94.5V105C37.5 107 36 107.75 34.5 107.75H21.5C20.75 107.75 20.25 107.5 20.25 106.5V72Z" fill="#171811"/>
+    <path d="M8.25 46C6.25 47 5.2 49.5 6 51.75L20.25 72L56.5 120.5C57.5 122 58.5 123 60 123C61.5 123 62.75 123 63.75 122L80 100.25L68.75 88L60 97.75L21.5 46C17 45.1 11.5 45 8.25 46ZM117 47C118 49 117.8 51 117.25 52.5L92.5 84L81.5 71.5L102.25 46C106 45.2 111 45.1 114.25 45.25C115.5 45.3 116.5 46 117 47Z" fill="#F0C400"/>
+    <path d="M79 72L81.5 72L89 80L86.2 80ZM73 92L75.5 92L79.5 96L76 96Z" fill="#F5F6F2"/>
+    <path d="M46 60L68 60L111 107.25L111.5 109.25L110 111.25H92.75Z" fill="#171811"/>
+  </g>
+  <g transform="translate(366 92) scale(1.55)">
+    <path fill-rule="evenodd" clip-rule="evenodd" d="M0 0H28C42 0 50 8 50 20C50 28 46 34 39 37L53 60H40L28 40H12V60H0ZM12 11V29H27C34 29 38 26 38 20C38 14 34 11 27 11Z" fill="#171811"/>
+    <path fill-rule="evenodd" clip-rule="evenodd" d="M66 0H116V11H78V24H112V35H78V49H117V60H66Z" fill="#171811"/>
+    <path fill-rule="evenodd" clip-rule="evenodd" d="M130 60V0H143L171 40V0H183V60H171L142 20V60Z" fill="#171811"/>
+    <path fill-rule="evenodd" clip-rule="evenodd" d="M197 0H210L223 42L237 0H250L229 60H217Z" fill="#171811"/>
+    <path fill-rule="evenodd" clip-rule="evenodd" d="M279 0H303C316 0 323 8 323 22V38C323 52 316 60 303 60H279C266 60 259 52 259 38V22C259 8 266 0 279 0ZM280 11C274 11 271 15 271 22V38C271 45 274 49 280 49H302C308 49 311 45 311 38V22C311 15 308 11 302 11Z" fill="#171811"/>
+    <path fill-rule="evenodd" clip-rule="evenodd" d="M0 0H28C42 0 50 8 50 20C50 28 46 34 39 37L53 60H40L28 40H12V60H0ZM12 11V29H27C34 29 38 26 38 20C38 14 34 11 27 11Z" fill="#171811" transform="translate(337 0)"/>
+  </g>
+  <rect x="366" y="224" width="58" height="8" fill="#F0C400"/>
+  <text x="366" y="280" fill="#171811" font-family="Liberation Sans, Arial, sans-serif" font-size="42" font-weight="700" letter-spacing="8">INFRA</text>
+  <text x="368" y="326" fill="#606254" font-family="Liberation Mono, monospace" font-size="17" letter-spacing="1.5">STACKED RAILS / DEPLOYMENT &amp; OPERATIONS</text>
+  <text x="1530" y="372" text-anchor="end" fill="#606254" font-family="Liberation Mono, monospace" font-size="15" letter-spacing="1">renvor-infra / 03</text>
+  <path d="M1204 101H1310L1352 125H1508" fill="none" stroke="#171811" stroke-width="9" stroke-linecap="square" stroke-linejoin="miter"/>
+  <path d="M1204 176H1310L1352 200H1508" fill="none" stroke="#E7E9DF" stroke-width="9" stroke-linecap="square" stroke-linejoin="miter"/>
+  <path d="M1204 251H1310L1352 275H1508" fill="none" stroke="#F0C400" stroke-width="9" stroke-linecap="square" stroke-linejoin="miter"/>
+  <rect x="1196" y="93" width="16" height="16" fill="#171811"/>
+  <rect x="1196" y="168" width="16" height="16" fill="#E7E9DF"/>
+  <rect x="1500" y="267" width="16" height="16" fill="#F0C400"/>
+</svg>
