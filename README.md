@@ -27,7 +27,7 @@
 > |---|---|
 > | Image | `ghcr.io/renvor-rs/renvor-site@sha256:649394aaef1ea1334417f86e471cc0f660eb178d417022bbdca01f47cddff11b` |
 > | Certificate | Let's Encrypt `CN=YE1`, `renvor.dev` + `www.renvor.dev`, expires 2026-11-15 |
-> | Documentation image | `ghcr.io/renvor-rs/renvor-docs@sha256:9240f8621a7bbfe735cb895298cc9fe6a75572e2e011a68d4405e11ee69ebfcd` |
+> | Documentation image | `ghcr.io/renvor-rs/renvor-docs@sha256:8dee47665ac5b27cb77131db1bac3a6067a7616a6e590aac0e4f43741262872f` |
 > | Documentation certificate | Let's Encrypt `CN=YE1`, `docs.renvor.dev`, expires 2026-12-02 |
 > | Reconciled by | Flux v2.9.4 as `flux-system/renvor-reconciler` — never as cluster-admin |
 >
